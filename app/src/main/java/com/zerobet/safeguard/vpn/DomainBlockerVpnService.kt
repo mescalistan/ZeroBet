@@ -17,14 +17,8 @@ import androidx.core.content.ContextCompat
 import com.zerobet.safeguard.R
 import com.zerobet.safeguard.SafeGuardApp
 import com.zerobet.safeguard.ui.MainActivity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.launch
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -43,7 +37,7 @@ import kotlin.concurrent.thread
  *    continua a uscire normalmente dalla rete reale: nessun dato passa da server esterni.
  *  - Android invia quindi ogni query DNS a [FAKE_DNS]: i pacchetti arrivano a questo servizio,
  *    che li legge dalla TUN, estrae il dominio richiesto e decide:
- *      * dominio bloccato  -> risponde subito con 0.0.0.0 (sinkhole)
+ *      * dominio bloccato (liste, parole chiave o euristica) -> risponde subito con 0.0.0.0 (sinkhole)
  *      * dominio consentito -> inoltra la query a un resolver pubblico e riscrive la risposta sulla TUN
  *
  * Limite noto: se sul telefono è attivo "DNS privato" (DNS-over-TLS) verso un provider specifico,
@@ -52,9 +46,8 @@ import kotlin.concurrent.thread
  */
 class DomainBlockerVpnService : VpnService() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    @Volatile private var filter: DomainFilter = DomainFilter.EMPTY
+    /** Filtro condiviso a livello di processo, sempre allineato al DB (vedi FilterStore). */
+    private lateinit var filterStore: FilterStore
     @Volatile private var tun: ParcelFileDescriptor? = null
     private var tunOutput: FileOutputStream? = null
     private val writeLock = Any()
@@ -63,13 +56,9 @@ class DomainBlockerVpnService : VpnService() {
 
     override fun onCreate() {
         super.onCreate()
-        // Mantiene in memoria uno snapshot aggiornato di whitelist e blacklist: ogni modifica
-        // fatta dalla dashboard è attiva immediatamente, senza riavviare la VPN.
-        val repo = (application as SafeGuardApp).repository
-        scope.launch {
-            combine(repo.whitelist, repo.blocked) { wl, bl -> DomainFilter(wl, bl) }
-                .collect { filter = it }
-        }
+        // Lo snapshot di whitelist, blacklist, domini auto-appresi e fonti esterne è mantenuto
+        // dal FilterStore: ogni modifica è attiva immediatamente, senza riavviare la VPN.
+        filterStore = (application as SafeGuardApp).filterStore
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -154,15 +143,21 @@ class DomainBlockerVpnService : VpnService() {
             return
         }
 
-        // 3) Decisione: whitelist -> blacklist -> keyword (vedi DomainFilter).
+        // 3) Decisione: whitelist -> liste -> parole chiave -> euristica (vedi DomainFilter).
+        val verdict = filterStore.current.check(question.name)
         when {
             question.name == DOH_CANARY -> {
                 // Firefox interroga questo dominio: NXDOMAIN gli dice di NON attivare il
                 // DNS-over-HTTPS automatico, che scavalcherebbe il filtro.
                 reply(datagram, DnsPackets.buildBlockedResponse(datagram.payload, question, nxDomain = true))
             }
-            filter.shouldBlock(question.name) -> {
+            verdict.blocked -> {
                 _blockedCount.value += 1
+                // Auto-alimentazione: un dominio bloccato dall'euristica viene salvato tra gli
+                // "auto-appresi", così resta in lista (ed è visibile al tutore nella dashboard).
+                if (verdict.reason == BlockReason.HEURISTIC) {
+                    filterStore.learnFromHeuristic(question.name, verdict.score)
+                }
                 reply(datagram, DnsPackets.buildBlockedResponse(datagram.payload, question))
             }
             else -> forward(datagram)
@@ -237,7 +232,6 @@ class DomainBlockerVpnService : VpnService() {
 
     override fun onDestroy() {
         stopVpn()
-        scope.cancel()
         super.onDestroy()
     }
 

@@ -6,6 +6,27 @@ class DomainRepository(private val dao: DomainDao) {
 
     val blocked: Flow<List<BlockedDomain>> = dao.observeBlocked()
     val whitelist: Flow<List<WhitelistedBank>> = dao.observeWhitelist()
+    val learned: Flow<List<AutoLearnedBlockedDomain>> = dao.observeLearned()
+    val syncStatus: Flow<List<SyncStatus>> = dao.observeSyncStatus()
+
+    /** Tutti i domini delle fonti esterne, come set per lookup O(1). */
+    suspend fun loadSyncedDomains(): Set<String> = dao.allSyncedDomains().toHashSet()
+
+    /** Registra un dominio auto-appreso (ignorato se già presente). */
+    suspend fun learn(rawDomain: String, origin: String, detail: String) {
+        val domain = normalizeDomain(rawDomain) ?: return
+        dao.insertLearned(
+            AutoLearnedBlockedDomain(domain, origin, detail.take(200), System.currentTimeMillis())
+        )
+    }
+
+    suspend fun removeLearned(domain: AutoLearnedBlockedDomain) = dao.deleteLearned(domain)
+
+    /** Falso positivo: toglie il dominio dagli auto-appresi e lo autorizza in modo permanente. */
+    suspend fun allowLearned(domain: AutoLearnedBlockedDomain) {
+        dao.insertWhitelisted(WhitelistedBank(name = "Consentito dal tutore", domain = domain.domain))
+        dao.deleteLearned(domain)
+    }
 
     /** @return false se l'input non è un dominio valido. */
     suspend fun addWhitelisted(name: String, rawDomain: String): Boolean {

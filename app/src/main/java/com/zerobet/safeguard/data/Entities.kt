@@ -10,6 +10,8 @@ object Category {
     const val TRADING = "TRADING"     // Trading / Crypto
     const val LOANS = "LOANS"         // Finanziarie / Prestiti
     const val BANK = "BANK"           // Banche (bloccate se non in whitelist)
+    const val ADS = "ADS"             // Reti pubblicitarie e affiliazioni di settore
+    const val DOH = "DOH"             // Resolver DNS-over-HTTPS (anti-bypass)
     const val CUSTOM = "CUSTOM"       // Aggiunte dal tutore
 
     fun label(category: String): String = when (category) {
@@ -17,6 +19,8 @@ object Category {
         TRADING -> "Trading e crypto"
         LOANS -> "Prestiti e finanziarie"
         BANK -> "Banche non autorizzate"
+        ADS -> "Pubblicità e affiliazioni"
+        DOH -> "Resolver DoH (anti-bypass)"
         else -> "Personalizzati"
     }
 }
@@ -47,4 +51,45 @@ data class WhitelistedBank(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
     val domain: String
+)
+
+/**
+ * Dominio proveniente da una fonte esterna (blocklist pubbliche, ADM, CONSOB, crt.sh).
+ * Tabella potenzialmente molto grande: non viene mai mostrata per intero nella UI, ma
+ * caricata in un HashSet in memoria dal filtro DNS.
+ * `batch` è il timestamp della sincronizzazione che ha scritto la riga: a download riuscito
+ * le righe della stessa fonte con batch più vecchio vengono eliminate.
+ */
+@Entity(tableName = "synced_domains", indices = [Index(value = ["source"])])
+data class SyncedDomain(
+    @PrimaryKey val domain: String,
+    val source: String,
+    val batch: Long
+)
+
+/**
+ * Dominio aggiunto automaticamente dall'app sul dispositivo:
+ *  - origin = HEURISTIC: punteggio di rischio del nome a dominio sopra soglia (filtro DNS)
+ *  - origin = SCREEN:    contenuti di gioco/trading/prestiti rilevati a schermo nel browser
+ */
+@Entity(tableName = "auto_learned_blocked_domains")
+data class AutoLearnedBlockedDomain(
+    @PrimaryKey val domain: String,
+    val origin: String,
+    val detail: String,
+    val learnedAt: Long
+) {
+    companion object {
+        const val ORIGIN_HEURISTIC = "HEURISTIC"
+        const val ORIGIN_SCREEN = "SCREEN"
+    }
+}
+
+/** Esito dell'ultima sincronizzazione di una fonte esterna. */
+@Entity(tableName = "sync_status")
+data class SyncStatus(
+    @PrimaryKey val source: String,
+    val lastSuccessAt: Long,
+    val domainCount: Int,
+    val lastError: String?
 )

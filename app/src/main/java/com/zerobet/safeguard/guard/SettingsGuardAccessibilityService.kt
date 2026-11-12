@@ -8,37 +8,60 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import com.zerobet.safeguard.R
 import com.zerobet.safeguard.SafeGuardApp
+import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
+import com.zerobet.safeguard.data.DomainRepository
 import com.zerobet.safeguard.ui.LockScreenActivity
+import com.zerobet.safeguard.vpn.SafeDomains
 
 /**
- * Guardiano Impostazioni.
+ * Servizio di accessibilità di SafeGuard. Ha due compiti distinti.
  *
- * Osserva i cambi di finestra delle sole app di sistema da cui si può disattivare SafeGuard
- * (Impostazioni e package installer). Quando la schermata visibile è una di quelle "sensibili":
- *   - Info app di SafeGuard (Disinstalla / Forza interruzione / Cancella dati)
- *   - Amministratori dispositivo
- *   - Impostazioni VPN
- *   - Accessibilità -> SafeGuard (altrimenti basterebbe spegnere il Guardiano stesso)
- *   - Dialogo di disinstallazione di SafeGuard
- * mostra la LockScreenActivity che richiede il PIN del tutore. Senza PIN l'utente viene
- * riportato alla Home con GLOBAL_ACTION_HOME.
+ * 1) GUARDIANO IMPOSTAZIONI
+ *    Quando la schermata visibile è una di quelle da cui si può disattivare la protezione:
+ *      - Info app di SafeGuard (Disinstalla / Forza interruzione / Cancella dati)
+ *      - Amministratori dispositivo
+ *      - Impostazioni VPN
+ *      - Accessibilità -> SafeGuard
+ *      - DNS privato (un DNS-over-TLS di sistema scavalcherebbe il filtro)
+ *      - Dialogo di disinstallazione di SafeGuard
+ *    mostra la LockScreenActivity che richiede il PIN del tutore; senza PIN si torna alla Home.
  *
- * Il servizio legge esclusivamente i testi di queste schermate di sistema per riconoscerle:
- * non registra né trasmette nulla.
+ * 2) BLOCCO DEI CONTENUTI A SCHERMO E AUTO-APPRENDIMENTO
+ *    Nei browser e nelle altre app legge i testi visibili e, se riconosce una combinazione ad
+ *    alta confidenza di espressioni su scommesse, trading o prestiti (vedi ContentClassifier),
+ *    torna indietro. Se la pagina è un sito esterno aperto nel browser, il suo dominio viene
+ *    aggiunto ai "domini auto-appresi" e da quel momento è bloccato anche a livello DNS.
+ *
+ * Privacy: i testi letti vengono analizzati in memoria sul dispositivo e subito scartati.
+ * Non vengono salvati né trasmessi; l'unico dato registrato è il dominio bloccato con il motivo.
  */
 class SettingsGuardAccessibilityService : AccessibilityService() {
 
+    private lateinit var app: SafeGuardApp
     private lateinit var appLabel: String
+    private var ignoredPackages: Set<String> = emptySet()
+
     private var lastLockAt = 0L
+    private var lastContentScanAt = 0L
+    private var lastContentBlockAt = 0L
+
+    // Le preferenze sono cifrate: leggerle a ogni evento sarebbe costoso, quindi si tengono
+    // in cache per qualche secondo.
+    private var flagsReadAt = 0L
+    private var onboardingDone = false
+    private var protectionEnabled = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        app = application as SafeGuardApp
         appLabel = getString(R.string.app_name).lowercase()
-        // Limita gli eventi ricevuti ai soli package rilevanti (privacy + batteria).
-        serviceInfo = serviceInfo.apply { packageNames = WATCHED_PACKAGES.toTypedArray() }
+        ignoredPackages = buildIgnoredPackages()
+        // Nessun filtro per package: servono gli eventi di browser e app, oltre alle Impostazioni.
+        serviceInfo = serviceInfo.apply { packageNames = null }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -47,21 +70,35 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
         val pkg = event.packageName?.toString() ?: return
-        if (pkg !in WATCHED_PACKAGES) return
-
-        val pinManager = (application as SafeGuardApp).pinManager
-        // Il Guardiano entra in funzione solo a wizard completato (durante l'onboarding il
-        // tutore deve poter concedere i permessi) e resta in silenzio nella finestra di grazia.
-        if (!pinManager.onboardingDone || GuardState.inGrace || GuardState.lockScreenVisible) return
+        if (pkg in ignoredPackages) return
 
         val now = SystemClock.elapsedRealtime()
-        if (now - lastLockAt < RELOCK_THROTTLE_MS) return
+        refreshFlags(now)
+        // Attivo solo a wizard completato (durante l'onboarding il tutore deve poter concedere
+        // i permessi) e in silenzio nella finestra di grazia concessa dal PIN.
+        if (!onboardingDone || GuardState.inGrace || GuardState.lockScreenVisible) return
 
-        if (isSensitiveScreen(event)) {
-            lastLockAt = now
-            showLockScreen()
+        if (pkg in SETTINGS_PACKAGES) {
+            if (now - lastLockAt >= RELOCK_THROTTLE_MS && isSensitiveScreen(event)) {
+                lastLockAt = now
+                showLockScreen()
+            }
+        } else if (protectionEnabled && now - lastContentScanAt >= CONTENT_SCAN_INTERVAL_MS) {
+            lastContentScanAt = now
+            inspectContent(pkg, now)
         }
     }
+
+    private fun refreshFlags(now: Long) {
+        if (flagsReadAt != 0L && now - flagsReadAt < FLAGS_CACHE_MS) return
+        flagsReadAt = now
+        onboardingDone = app.pinManager.onboardingDone
+        protectionEnabled = app.pinManager.protectionEnabled
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 1) Guardiano Impostazioni
+    // ---------------------------------------------------------------------------------------
 
     /** Riconosce le schermate sensibili dal nome della classe della finestra e dai testi visibili. */
     private fun isSensitiveScreen(event: AccessibilityEvent): Boolean {
@@ -71,26 +108,22 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
 
         val texts = StringBuilder()
         event.text.forEach { texts.append(it).append('\n') }
-        collectText(rootInActiveWindow, texts, depth = 0)
+        collectText(rootInActiveWindow, texts, 0, SETTINGS_TEXT_CHARS)
         val screen = texts.toString().lowercase()
 
-        // Schermata "Amministratori dispositivo" (titolo localizzato)
-        if (DEVICE_ADMIN_TITLES.any { screen.contains(it) }) return true
+        // Titoli che identificano da soli la schermata: "Amministratori dispositivo" e il
+        // dialogo di scelta del DNS privato (non la semplice voce "DNS privato" nell'elenco Rete).
+        if (STANDALONE_TITLES.any { screen.contains(it) }) return true
 
         // Tutte le altre schermate sensibili mostrano il nome dell'app insieme a un'azione
         // o a un contesto pericoloso. Il solo nome (es. nell'elenco generale delle app) non basta.
-        if (screen.contains(appLabel) && DANGEROUS_CONTEXT.any { screen.contains(it) }) return true
-
-        return false
-    }
-
-    /** Visita in profondità l'albero dei nodi raccogliendo testi e content description. */
-    private fun collectText(node: AccessibilityNodeInfo?, out: StringBuilder, depth: Int) {
-        if (node == null || depth > MAX_DEPTH || out.length > MAX_TEXT_CHARS) return
-        node.text?.let { out.append(it).append('\n') }
-        node.contentDescription?.let { out.append(it).append('\n') }
-        for (i in 0 until node.childCount) {
-            collectText(node.getChild(i), out, depth + 1)
+        if (!screen.contains(appLabel)) return false
+        // La pagina generale "Rete e Internet" mostra la riga "VPN · SafeGuard" accanto a Wi-Fi,
+        // hotspot, ecc.: lì "vpn" non conta, altrimenti l'utente non potrebbe più cambiare rete.
+        // Restano protetti la pagina VPN vera e propria e il dialogo del DNS privato.
+        val isNetworkDashboard = NETWORK_DASHBOARD_HINTS.any { screen.contains(it) }
+        return DANGEROUS_CONTEXT.any { context ->
+            screen.contains(context) && !(context == "vpn" && isNetworkDashboard)
         }
     }
 
@@ -99,6 +132,90 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             Intent(this, LockScreenActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
         )
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 2) Contenuti a schermo
+    // ---------------------------------------------------------------------------------------
+
+    private fun inspectContent(pkg: String, now: Long) {
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != pkg) return
+
+        // Nei browser noti si legge il dominio dalla barra degli indirizzi.
+        val host = BROWSER_URL_BARS[pkg]?.let { readBrowserHost(root, it) }
+        val filter = app.filterStore.current
+
+        // a) Il browser è su un dominio già in blacklist: può succedere se la pagina è arrivata
+        //    aggirando il DNS (DoH per indirizzo IP, cache, proxy). Si esce comunque.
+        if (host != null && filter.check(host).blocked) {
+            blockContent("sito in blacklist", now)
+            return
+        }
+
+        // b) Analisi dei testi visibili (pagina web, banner pubblicitario, schermata di un'app).
+        val text = StringBuilder()
+        collectText(root, text, 0, CONTENT_TEXT_CHARS)
+        val hit = ContentClassifier.classify(text) ?: return
+        blockContent(hit.category.label, now)
+
+        // c) Auto-apprendimento: solo per siti esterni. Mai per la banca in whitelist (lì si esce
+        //    dalla pagina dei prestiti ma l'home banking resta raggiungibile) né per motori di
+        //    ricerca e grandi piattaforme, dove il testo incriminato è un risultato o un annuncio.
+        if (host != null && !filter.isWhitelisted(host) && !SafeDomains.contains(host)) {
+            app.filterStore.learn(
+                host, AutoLearnedBlockedDomain.ORIGIN_SCREEN,
+                "${hit.category.label}: ${hit.phrases.take(4).joinToString(", ")}"
+            )
+        }
+    }
+
+    /** Dominio mostrato nella barra degli indirizzi, o null se non leggibile o in fase di digitazione. */
+    private fun readBrowserHost(root: AccessibilityNodeInfo, urlBarId: String): String? {
+        val node = root.findAccessibilityNodeInfosByViewId(urlBarId)?.firstOrNull() ?: return null
+        if (node.isFocused) return null                    // l'utente sta scrivendo: non è ancora un URL
+        val text = node.text?.toString()?.trim().orEmpty()
+        if (text.isEmpty() || text.contains(' ')) return null
+        return DomainRepository.normalizeDomain(text)
+    }
+
+    /**
+     * Esce dal contenuto: prima con Indietro; se entro pochi secondi si ricade su un altro
+     * contenuto da bloccare (es. la pagina precedente è dello stesso sito) si va alla Home.
+     */
+    private fun blockContent(reason: String, now: Long) {
+        val repeated = now - lastContentBlockAt < REPEAT_BLOCK_WINDOW_MS
+        lastContentBlockAt = now
+        performGlobalAction(if (repeated) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+        Toast.makeText(this, "SafeGuard: contenuto bloccato ($reason)", Toast.LENGTH_SHORT).show()
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Supporto
+    // ---------------------------------------------------------------------------------------
+
+    /** Visita in profondità l'albero dei nodi raccogliendo testi e content description. */
+    private fun collectText(node: AccessibilityNodeInfo?, out: StringBuilder, depth: Int, maxChars: Int) {
+        if (node == null || depth > MAX_DEPTH || out.length > maxChars) return
+        node.text?.let { out.append(it).append('\n') }
+        node.contentDescription?.let { out.append(it).append('\n') }
+        for (i in 0 until node.childCount) {
+            collectText(node.getChild(i), out, depth + 1, maxChars)
+        }
+    }
+
+    /** Package su cui non si analizzano mai i contenuti. */
+    private fun buildIgnoredPackages(): Set<String> {
+        val ignored = HashSet(ALWAYS_IGNORED)
+        ignored.add(packageName)
+        // Launcher
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        packageManager.queryIntentActivities(home, 0).forEach { ignored.add(it.activityInfo.packageName) }
+        // Tastiera in uso
+        Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.substringBefore('/')?.let { ignored.add(it) }
+        ignored.removeAll(SETTINGS_PACKAGES)
+        return ignored
     }
 
     override fun onInterrupt() = Unit
@@ -113,10 +230,15 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private var instance: SettingsGuardAccessibilityService? = null
 
         private const val RELOCK_THROTTLE_MS = 800L
-        private const val MAX_DEPTH = 25
-        private const val MAX_TEXT_CHARS = 6000
+        private const val CONTENT_SCAN_INTERVAL_MS = 700L
+        private const val REPEAT_BLOCK_WINDOW_MS = 4_000L
+        private const val FLAGS_CACHE_MS = 3_000L
+        private const val MAX_DEPTH = 40
+        private const val SETTINGS_TEXT_CHARS = 6_000
+        private const val CONTENT_TEXT_CHARS = 12_000
 
-        private val WATCHED_PACKAGES = setOf(
+        /** App di sistema da cui si può disattivare SafeGuard: qui agisce il Guardiano. */
+        private val SETTINGS_PACKAGES = setOf(
             "com.android.settings",
             "com.samsung.android.settings",          // non esiste su tutti i Samsung, innocuo
             "com.miui.securitycenter",               // "Info app" su Xiaomi/MIUI
@@ -127,12 +249,52 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             "com.android.vpndialogs",                // dialogo di sistema per scollegare la VPN
         )
 
+        /**
+         * Barra degli indirizzi dei browser supportati (resource-id della vista).
+         * Negli altri browser il blocco dei contenuti funziona comunque, ma senza auto-apprendimento.
+         */
+        private val BROWSER_URL_BARS = mapOf(
+            "com.android.chrome" to "com.android.chrome:id/url_bar",
+            "com.chrome.beta" to "com.chrome.beta:id/url_bar",
+            "org.mozilla.firefox" to "org.mozilla.firefox:id/mozac_browser_toolbar_url_view",
+            "org.mozilla.focus" to "org.mozilla.focus:id/mozac_browser_toolbar_url_view",
+            "com.sec.android.app.sbrowser" to "com.sec.android.app.sbrowser:id/location_bar_edit_text",
+            "com.brave.browser" to "com.brave.browser:id/url_bar",
+            "com.microsoft.emmx" to "com.microsoft.emmx:id/url_bar",
+            "com.opera.browser" to "com.opera.browser:id/url_field",
+            "com.opera.mini.native" to "com.opera.mini.native:id/url_field",
+            "com.vivaldi.browser" to "com.vivaldi.browser:id/url_bar",
+            "com.duckduckgo.mobile.android" to "com.duckduckgo.mobile.android:id/omnibarTextInput",
+        )
+
+        /**
+         * Sistema e app di comunicazione personale: una chat in cui un amico scrive "schedina"
+         * non deve far uscire l'utente dalla conversazione.
+         */
+        private val ALWAYS_IGNORED = setOf(
+            "android", "com.android.systemui", "com.google.android.permissioncontroller",
+            "com.android.permissioncontroller", "com.google.android.dialer", "com.android.dialer",
+            "com.google.android.contacts", "com.samsung.android.dialer", "com.android.phone",
+            "com.google.android.apps.messaging", "com.samsung.android.messaging",
+            "com.whatsapp", "com.whatsapp.w4b", "org.telegram.messenger", "org.thoughtcrime.securesms",
+            "com.google.android.gm", "com.microsoft.office.outlook",
+        )
+
         private val SENSITIVE_CLASS_HINTS = listOf("DeviceAdmin", "VpnSettings", "UninstallerActivity")
 
-        private val DEVICE_ADMIN_TITLES = listOf(
+        private val STANDALONE_TITLES = listOf(
+            // Amministratori dispositivo
             "amministratori dispositivo", "amministratore dispositivo", "app di amministrazione",
             "device admin", "device administrators",
+            // Dialogo "DNS privato"
+            "private dns provider hostname", "select private dns mode",
+            "nome host del provider dns privato", "nome host del provider di dns privato",
+            "hostname del provider dns privato", "seleziona modalità dns privato",
+            "seleziona la modalità dns privato",
         )
+
+        /** Voci presenti solo nella pagina generale "Rete e Internet". */
+        private val NETWORK_DASHBOARD_HINTS = listOf("hotspot", "airplane mode", "modalità aereo")
 
         private val DANGEROUS_CONTEXT = listOf(
             // Info app

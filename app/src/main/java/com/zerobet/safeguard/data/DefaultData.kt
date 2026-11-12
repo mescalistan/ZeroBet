@@ -110,6 +110,36 @@ object DefaultData {
         "webank.it", "youbanking.it", "banking4you.it", "csebo.it",
     )
 
+    /**
+     * Reti di affiliazione e pubblicità che veicolano annunci di scommesse, trading e prestiti,
+     * più i comparatori di prestiti/mutui.
+     */
+    private val affiliateDomains = listOf(
+        "incomeaccess.com", "btagmedia.com", "affilka.com", "netrefer.com", "myaffiliates.com",
+        "cellxpert.com", "propellerads.com", "adsterra.com", "taboola.com", "outbrain.com",
+        "exoclick.com", "popads.net", "mgid.com", "revcontent.com", "clickadu.com",
+        "hilltopads.com", "trafficjunky.com",
+        "facile.it", "segugio.it", "mutuionline.it", "prestitionline.it",
+    )
+
+    /**
+     * Resolver DNS-over-HTTPS noti. Sinkholando il loro hostname, i browser (Chrome, Brave,
+     * Firefox...) non riescono ad avviare il "DNS sicuro" e ricadono sul DNS di sistema, cioè
+     * sul nostro filtro. Non ferma un DoH configurato direttamente per indirizzo IP.
+     */
+    private val dohResolvers = listOf(
+        "dns.google", "dns.google.com", "cloudflare-dns.com", "1dot1dot1dot1.cloudflare-dns.com",
+        "one.one.one.one", "dns.quad9.net", "dns.adguard.com", "dns.adguard-dns.com",
+        "doh.opendns.com", "dns.nextdns.io", "doh.cleanbrowsing.org", "doh.dns.sb",
+        "dns.mullvad.net", "freedns.controld.com",
+    )
+
+    /** Voci aggiunte con la versione 2 del database (inserite anche dalla migrazione 1 -> 2). */
+    fun seedEntriesV2(): List<BlockedDomain> = buildList {
+        affiliateDomains.forEach { add(BlockedDomain(pattern = it, category = Category.ADS)) }
+        dohResolvers.forEach { add(BlockedDomain(pattern = it, category = Category.DOH)) }
+    }
+
     /** Elenco completo delle voci (pattern, categoria, isKeyword) da inserire alla creazione del DB. */
     fun seedEntries(): List<BlockedDomain> = buildList {
         gamblingDomains.forEach { add(BlockedDomain(pattern = it, category = Category.GAMBLING)) }
@@ -120,5 +150,6 @@ object DefaultData {
         loanKeywords.forEach { add(BlockedDomain(pattern = it, category = Category.LOANS, isKeyword = true)) }
         bankPresets.flatMap { it.domains }.forEach { add(BlockedDomain(pattern = it, category = Category.BANK)) }
         extraBankDomains.forEach { add(BlockedDomain(pattern = it, category = Category.BANK)) }
+        addAll(seedEntriesV2())
     }
 }

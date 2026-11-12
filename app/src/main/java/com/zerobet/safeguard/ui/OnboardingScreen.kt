@@ -224,7 +224,7 @@ private fun PermissionsStep(vm: MainViewModel, onFinished: () -> Unit) {
         )
         PermissionCard(
             title = "3. Guardiano Impostazioni (Accessibilità)",
-            description = "Chiede il PIN quando qualcuno apre le Impostazioni per disattivare SafeGuard. Nell'elenco scegli \"SafeGuard – Guardiano Impostazioni\" e attivalo. Il servizio non legge né invia altri contenuti dello schermo.",
+            description = "Chiede il PIN quando qualcuno apre le Impostazioni per disattivare SafeGuard e legge i testi visibili in browser e app per bloccare pagine e annunci di scommesse, trading e prestiti. L'analisi avviene solo sul telefono: nulla viene salvato o inviato. Nell'elenco scegli \"SafeGuard – Guardiano Impostazioni\" e attivalo.",
             granted = state.accessibility,
             onGrant = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         )

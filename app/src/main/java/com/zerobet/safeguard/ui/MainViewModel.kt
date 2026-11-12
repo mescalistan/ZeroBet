@@ -7,8 +7,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.zerobet.safeguard.SafeGuardApp
 import com.zerobet.safeguard.admin.SafeGuardDeviceAdminReceiver
+import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
 import com.zerobet.safeguard.data.BankPreset
 import com.zerobet.safeguard.data.BlockedDomain
+import com.zerobet.safeguard.data.SyncStatus
 import com.zerobet.safeguard.data.WhitelistedBank
 import com.zerobet.safeguard.guard.SettingsGuardAccessibilityService
 import com.zerobet.safeguard.security.PinManager
@@ -40,6 +42,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val blocked: StateFlow<List<BlockedDomain>> =
         repository.blocked.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val learned: StateFlow<List<AutoLearnedBlockedDomain>> =
+        repository.learned.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val syncStatus: StateFlow<List<SyncStatus>> =
+        repository.syncStatus.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun removeLearned(domain: AutoLearnedBlockedDomain) = viewModelScope.launch {
+        repository.removeLearned(domain)
+    }
+
+    /** Falso positivo: il dominio viene tolto dagli auto-appresi e messo in whitelist. */
+    fun allowLearned(domain: AutoLearnedBlockedDomain) = viewModelScope.launch {
+        repository.allowLearned(domain)
+    }
 
     fun addBankPreset(preset: BankPreset, onDone: () -> Unit = {}) = viewModelScope.launch {
         repository.addBankPreset(preset)

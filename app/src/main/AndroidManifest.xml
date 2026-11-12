@@ -17,6 +17,14 @@
     <!-- Necessario per lanciare la richiesta di disinstallazione dalla dashboard -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
+    <!-- Visibilità dei launcher installati: il servizio di accessibilità li esclude dall'analisi dei contenuti -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+    </queries>
+
     <application
         android:name=".SafeGuardApp"
         android:allowBackup="false"
@@ -64,7 +72,7 @@
                 android:value="true" />
         </service>
 
-        <!-- Modulo 3: Guardiano Impostazioni -->
+        <!-- Guardiano Impostazioni + blocco dei contenuti a schermo con auto-apprendimento -->
         <service
             android:name=".guard.SettingsGuardAccessibilityService"
             android:exported="true"
