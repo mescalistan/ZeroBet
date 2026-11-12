@@ -9,6 +9,17 @@ class DomainRepository(private val dao: DomainDao) {
     val learned: Flow<List<AutoLearnedBlockedDomain>> = dao.observeLearned()
     val syncStatus: Flow<List<SyncStatus>> = dao.observeSyncStatus()
 
+    val syncedCount: Flow<Int> = dao.observeSyncedCount()
+
+    fun synced(query: String, limit: Int): Flow<List<SyncedDomain>> = dao.observeSynced(query, limit)
+
+    fun syncedMatches(query: String): Flow<Int> = dao.observeSyncedMatches(query)
+
+    /** Falso positivo di una lista esterna: la whitelist ha la precedenza anche dopo i prossimi aggiornamenti. */
+    suspend fun allowSynced(domain: SyncedDomain) {
+        dao.insertWhitelisted(WhitelistedBank(name = "Consentito dal tutore", domain = domain.domain))
+    }
+
     /** Tutti i domini delle fonti esterne, come set per lookup O(1). */
     suspend fun loadSyncedDomains(): Set<String> = dao.allSyncedDomains().toHashSet()
 

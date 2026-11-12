@@ -55,6 +55,7 @@ app/src/main/
     ├── guard/
     │   ├── SettingsGuardAccessibilityService.kt   Guardiano Impostazioni + contenuti a schermo
     │   ├── ContentClassifier.kt                   Riconoscimento di scommesse/trading/prestiti nei testi
+    │   ├── SearchQueryClassifier.kt               Ricerche a rischio nei motori di ricerca
     │   └── GuardState.kt                          Finestra di grazia dopo il PIN
     ├── receiver/BootReceiver.kt   Riavvio al boot
     └── ui/
@@ -87,10 +88,13 @@ per label), anche con centinaia di migliaia di domini in lista.
 | **Euristica DNS** (`DomainHeuristics`) | Per i domini non in lista calcola un punteggio da TLD (`.bet`, `.casino`, `.forex`, `.loan`…) e token nel nome (`22bet`, `casino`, `trading`, `prestito`, `bonus`…). Sopra soglia: sinkhole e salvataggio tra gli auto-appresi. |
 | **Anti-DoH** | I resolver DoH noti (`dns.google`, `cloudflare-dns.com`, `dns.quad9.net`…) sono in blacklist fissa; il canary di Firefox riceve NXDOMAIN. |
 | **Contenuti a schermo** (`ContentClassifier`) | Il servizio di accessibilità legge i testi visibili in browser e app: con una combinazione ad alta confidenza di espressioni (es. "bonus benvenuto" + "gioca ora", "calcola la tua rata" + "TAEG") torna indietro e, se è un sito esterno, ne aggiunge il dominio agli auto-appresi. Vale anche dentro il sito della banca in whitelist (senza però bloccarne il dominio). |
+| **Ricerche** (`SearchQueryClassifier`) | Se in un motore di ricerca (Google, Bing, DuckDuckGo, Yahoo, Brave, Ecosia, Startpage, Qwant… e ricerca di YouTube) viene scritta una ricerca su scommesse, trading/investimenti o prestiti, l'app esce dal motore di ricerca e torna alla Home. Qui basta una parola ("trading", "investimenti", "mutuo", un marchio…), ma il confronto è per parola intera: "investigatore", "betulla", "giocatore in prestito", "borsa di studio" non scattano. Le ricerche di aiuto ("come smettere di giocare", "ludopatia numero verde") non sono mai bloccate. |
 | **DNS privato** | Il Guardiano chiede il PIN sul dialogo "DNS privato" delle Impostazioni; la dashboard avvisa se è impostato un provider. |
 
 Le voci delle liste esterne già coperte da parole chiave o euristica non vengono salvate (su circa
-445.000 righe scaricate ne restano circa 210.000). I domini auto-appresi sono visibili nella scheda
+445.000 righe scaricate ne restano circa 210.000). Nella scheda **Blacklist** della dashboard compaiono
+sia le regole dell'app e del tutore sia i domini delle liste esterne (caricati a pagine di 200, con
+ricerca per nome e "Consenti" per i falsi positivi). I domini auto-appresi sono visibili nella scheda
 **Appresi** della dashboard, dove il tutore può rimuoverli o consentirli in modo permanente.
 
 **Privacy.** I testi letti a schermo sono analizzati in memoria sul dispositivo e scartati subito:
@@ -118,6 +122,9 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
   il tutore li corregge dalla scheda "Appresi" con "Consenti";
 - l'auto-apprendimento da schermo legge la barra degli indirizzi solo dei browser supportati (Chrome, Firefox,
   Samsung Internet, Brave, Edge, Opera, Vivaldi, DuckDuckGo); negli altri il contenuto viene bloccato ma il dominio non viene appreso;
+- il blocco delle ricerche legge la barra degli indirizzi dei browser supportati e le caselle di ricerca delle
+  pagine dei motori noti: un motore non in elenco o un browser non supportato non vengono controllati (restano
+  attivi il riconoscimento dei contenuti e il filtro DNS);
 - dalle pagine CONSOB i domini sono estratti con regex: i link di servizio noti sono esclusi, ma un sito legittimo
   citato in un comunicato potrebbe finire in lista;
 - il blocco agisce sui **siti/domini**; le app già installate che contattano domini non in lista non vengono fermate;

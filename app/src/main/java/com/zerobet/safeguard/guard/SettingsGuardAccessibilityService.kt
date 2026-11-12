@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
@@ -35,6 +37,11 @@ import com.zerobet.safeguard.vpn.SafeDomains
  *    torna indietro. Se la pagina è un sito esterno aperto nel browser, il suo dominio viene
  *    aggiunto ai "domini auto-appresi" e da quel momento è bloccato anche a livello DNS.
  *
+ * 3) BLOCCO DELLE RICERCHE
+ *    Se in un motore di ricerca (barra degli indirizzi del browser, casella di ricerca della
+ *    pagina, app Google) viene scritta una ricerca su scommesse, trading/investimenti o prestiti
+ *    (vedi SearchQueryClassifier), si esce dal motore di ricerca e si torna alla Home.
+ *
  * Privacy: i testi letti vengono analizzati in memoria sul dispositivo e subito scartati.
  * Non vengono salvati né trasmessi; l'unico dato registrato è il dominio bloccato con il motivo.
  */
@@ -47,6 +54,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private var lastLockAt = 0L
     private var lastContentScanAt = 0L
     private var lastContentBlockAt = 0L
+    private val handler = Handler(Looper.getMainLooper())
 
     // Le preferenze sono cifrate: leggerle a ogni evento sarebbe costoso, quindi si tengono
     // in cache per qualche secondo.
@@ -142,6 +150,12 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != pkg) return
 
+        // Ricerche a rischio: si esce dal motore di ricerca prima ancora di guardare i risultati.
+        findRiskySearch(pkg, root)?.let { hit ->
+            blockSearch(hit, now)
+            return
+        }
+
         // Nei browser noti si legge il dominio dalla barra degli indirizzi.
         val host = BROWSER_URL_BARS[pkg]?.let { readBrowserHost(root, it) }
         val filter = app.filterStore.current
@@ -168,6 +182,70 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
                 "${hit.category.label}: ${hit.phrases.take(4).joinToString(", ")}"
             )
         }
+    }
+
+    /**
+     * Cerca una ricerca a rischio in due punti:
+     *  - l'indirizzo della pagina dei risultati (es. google.com/search?q=...);
+     *  - le caselle di testo della pagina di un motore di ricerca o di un'app di ricerca.
+     * Mentre si scrive, l'ultima parola incompleta non viene valutata (vedi SearchQueryClassifier).
+     */
+    private fun findRiskySearch(pkg: String, root: AccessibilityNodeInfo): SearchHit? {
+        val urlBarId = BROWSER_URL_BARS[pkg]
+        var onSearchEngine = pkg in SEARCH_APPS
+
+        if (urlBarId != null) {
+            val bar = root.findAccessibilityNodeInfosByViewId(urlBarId)?.firstOrNull()
+            val text = bar?.text?.toString()?.trim().orEmpty()
+            if (bar != null && text.isNotEmpty() && !isHint(bar)) {
+                val looksLikeUrl = !text.contains(' ') && text.contains('.')
+                if (looksLikeUrl) {
+                    SearchQueryClassifier.queryFromUrl(text)?.let { query ->
+                        SearchQueryClassifier.classify(query)?.let { return it }
+                    }
+                    val host = DomainRepository.normalizeDomain(text)
+                    if (host != null && SearchQueryClassifier.isSearchEngine(host)) onSearchEngine = true
+                } else if (!bar.isFocused) {
+                    // Mentre l'utente scrive nella barra NON si valuta nulla: il browser completa da
+                    // solo il testo con le ricerche precedenti ("inv" -> "investimenti sicuri") e
+                    // bloccherebbe chi sta scrivendo "investigatore". Si blocca all'invio della ricerca.
+                    // Alcuni browser mostrano nella barra i termini cercati al posto dell'indirizzo.
+                    SearchQueryClassifier.classify(text)?.let { return it }
+                }
+            }
+        }
+
+        if (!onSearchEngine) return null
+        val fields = ArrayList<AccessibilityNodeInfo>(4)
+        collectEditable(root, fields, 0, urlBarId)
+        for (field in fields) {
+            val text = field.text?.toString()?.trim().orEmpty()
+            if (text.isEmpty() || isHint(field)) continue
+            SearchQueryClassifier.classify(text, typing = field.isFocused)?.let { return it }
+        }
+        return null
+    }
+
+    private fun isHint(node: AccessibilityNodeInfo): Boolean =
+        android.os.Build.VERSION.SDK_INT >= 26 && node.isShowingHintText
+
+    private fun collectEditable(
+        node: AccessibilityNodeInfo?, out: MutableList<AccessibilityNodeInfo>, depth: Int, skipId: String?
+    ) {
+        if (node == null || depth > MAX_DEPTH || out.size >= MAX_EDITABLE_FIELDS) return
+        if (node.isEditable && node.viewIdResourceName != skipId) out.add(node)
+        for (i in 0 until node.childCount) collectEditable(node.getChild(i), out, depth + 1, skipId)
+    }
+
+    /** Esce dal motore di ricerca: Indietro (chiude la tastiera o la pagina dei risultati), poi Home. */
+    private fun blockSearch(hit: SearchHit, now: Long) {
+        lastContentBlockAt = now
+        // Nel log solo la categoria: il testo cercato non viene mai registrato.
+        android.util.Log.i("SafeGuardSearch", "ricerca bloccata: ${hit.category}")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 250)
+        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_HOME) }, 500)
+        Toast.makeText(this, "SafeGuard: ricerca bloccata (${hit.category.label})", Toast.LENGTH_SHORT).show()
     }
 
     /** Dominio mostrato nella barra degli indirizzi, o null se non leggibile o in fase di digitazione. */
@@ -221,6 +299,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
         if (instance === this) instance = null
         super.onDestroy()
     }
@@ -236,6 +315,16 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private const val MAX_DEPTH = 40
         private const val SETTINGS_TEXT_CHARS = 6_000
         private const val CONTENT_TEXT_CHARS = 12_000
+        private const val MAX_EDITABLE_FIELDS = 6
+
+        /** App di ricerca: qui si controllano le caselle di testo anche senza barra degli indirizzi. */
+        private val SEARCH_APPS = setOf(
+            "com.google.android.googlequicksearchbox",   // app Google / widget di ricerca
+            "com.google.android.apps.searchlite",        // Google Go
+            "com.microsoft.bing",
+            "com.ecosia.android",
+            "com.qwant.liberty",
+        )
 
         /** App di sistema da cui si può disattivare SafeGuard: qui agisce il Guardiano. */
         private val SETTINGS_PACKAGES = setOf(

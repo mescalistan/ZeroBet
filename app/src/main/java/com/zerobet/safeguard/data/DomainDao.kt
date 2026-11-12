@@ -43,6 +43,16 @@ interface DomainDao {
     @Query("SELECT domain FROM synced_domains")
     suspend fun allSyncedDomains(): List<String>
 
+    @Query("SELECT COUNT(*) FROM synced_domains")
+    fun observeSyncedCount(): Flow<Int>
+
+    /** Pagina di domini delle liste esterne per la dashboard ([query] vuota = tutti). */
+    @Query("SELECT * FROM synced_domains WHERE domain LIKE '%' || :query || '%' ORDER BY domain LIMIT :limit")
+    fun observeSynced(query: String, limit: Int): Flow<List<SyncedDomain>>
+
+    @Query("SELECT COUNT(*) FROM synced_domains WHERE domain LIKE '%' || :query || '%'")
+    fun observeSyncedMatches(query: String): Flow<Int>
+
     // ---- Domini auto-appresi ----
 
     @Query("SELECT * FROM auto_learned_blocked_domains ORDER BY learnedAt DESC")

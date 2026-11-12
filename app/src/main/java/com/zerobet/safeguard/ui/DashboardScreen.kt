@@ -58,6 +58,7 @@ import com.zerobet.safeguard.data.BlockedDomain
 import com.zerobet.safeguard.data.Category
 import com.zerobet.safeguard.data.WhitelistedBank
 import com.zerobet.safeguard.data.SyncStatus
+import com.zerobet.safeguard.data.SyncedDomain
 import com.zerobet.safeguard.guard.GuardState
 import com.zerobet.safeguard.sync.BlocklistSources
 import com.zerobet.safeguard.sync.SyncScheduler
@@ -80,6 +81,11 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
     val whitelist by vm.whitelist.collectAsStateWithLifecycle()
     val blocked by vm.blocked.collectAsStateWithLifecycle()
     val learned by vm.learned.collectAsStateWithLifecycle()
+    val synced by vm.synced.collectAsStateWithLifecycle()
+    val syncedCount by vm.syncedCount.collectAsStateWithLifecycle()
+    val syncedMatches by vm.syncedMatches.collectAsStateWithLifecycle()
+    val blacklistQuery by vm.blacklistQuery.collectAsStateWithLifecycle()
+    val whitelistedDomains = remember(whitelist) { whitelist.mapTo(HashSet()) { it.domain } }
     val syncStatus by vm.syncStatus.collectAsStateWithLifecycle()
     val syncRunning by SyncState.running.collectAsStateWithLifecycle()
     val syncProgress by SyncState.progress.collectAsStateWithLifecycle()
@@ -228,7 +234,7 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
         item {
             TabRow(selectedTabIndex = tab) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Whitelist (${whitelist.size})") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Blacklist (${blocked.size})") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Blacklist (${blocked.size + syncedCount})") })
                 Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Appresi (${learned.size})") })
             }
         }
@@ -259,14 +265,70 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
             }
         } else {
             item { AddBlacklistRow(vm) }
-            item { BlacklistFilter.Chips() }
-            val visible = blocked.filter { BlacklistFilter.selected == null || it.category == BlacklistFilter.selected }
-            items(visible, key = { "b${it.id}" }) { entry ->
-                DomainRow(
-                    title = entry.pattern,
-                    subtitle = (if (entry.isKeyword) "Parola chiave · " else "Dominio · ") + Category.label(entry.category),
-                    onRemove = { vm.removeBlocked(entry) }
+            item {
+                OutlinedTextField(
+                    value = blacklistQuery,
+                    onValueChange = { vm.searchBlacklist(it) },
+                    label = { Text("Cerca nella blacklist") },
+                    placeholder = { Text("es. bet365") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                    modifier = Modifier.fillMaxWidth()
                 )
+            }
+            item { BlacklistFilter.Chips() }
+            val filter = BlacklistFilter.selected
+            val showManual = filter != BlacklistFilter.EXTERNAL
+            val showExternal = filter == null || filter == BlacklistFilter.EXTERNAL
+
+            if (showManual) {
+                val visible = blocked.filter {
+                    (filter == null || it.category == filter) &&
+                        (blacklistQuery.isEmpty() || it.pattern.contains(blacklistQuery))
+                }
+                item {
+                    SectionHeader("Regole dell'app e del tutore", "${visible.size} voci")
+                }
+                items(visible, key = { "b${it.id}" }) { entry ->
+                    DomainRow(
+                        title = entry.pattern,
+                        subtitle = (if (entry.isKeyword) "Parola chiave · " else "Dominio · ") + Category.label(entry.category),
+                        onRemove = { vm.removeBlocked(entry) }
+                    )
+                }
+            }
+
+            if (showExternal) {
+                item {
+                    SectionHeader(
+                        "Liste esterne",
+                        if (blacklistQuery.isEmpty()) "$syncedCount domini"
+                        else "$syncedMatches di $syncedCount domini"
+                    )
+                }
+                if (syncedCount == 0) {
+                    item {
+                        Text(
+                            "Le liste esterne non sono ancora state scaricate: usa \"Forza aggiornamento ora\" qui sopra.",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                }
+                items(synced, key = { "s${it.domain}" }) { entry ->
+                    SyncedRow(
+                        entry = entry,
+                        allowed = entry.domain in whitelistedDomains,
+                        onAllow = { vm.allowSynced(entry) }
+                    )
+                }
+                if (synced.size < syncedMatches) {
+                    item {
+                        OutlinedButton(onClick = { vm.showMoreSynced() }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Mostra altri (${synced.size} di $syncedMatches)")
+                        }
+                    }
+                }
             }
         }
 
@@ -315,6 +377,9 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
 
 /** Filtro per categoria della blacklist (stato UI condiviso tra chip ed elenco). */
 private object BlacklistFilter {
+    /** Valore speciale del filtro: solo i domini scaricati dalle liste esterne. */
+    const val EXTERNAL = "__EXTERNAL__"
+
     var selected by mutableStateOf<String?>(null)
 
     private val options = listOf(
@@ -326,6 +391,7 @@ private object BlacklistFilter {
         Category.BANK to "Banche",
         Category.ADS to "Pubblicità",
         Category.DOH to "DoH",
+        EXTERNAL to "Liste esterne",
     )
 
     @Composable
@@ -465,6 +531,37 @@ private fun LearnedRow(entry: AutoLearnedBlockedDomain, onAllow: () -> Unit, onR
             }
             TextButton(onClick = onAllow) { Text("Consenti") }
             TextButton(onClick = onRemove) { Text("Rimuovi") }
+        }
+        HorizontalDivider()
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, detail: String) {
+    Row(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** Dominio di una lista esterna: non si rimuove (tornerebbe al prossimo aggiornamento), si consente. */
+@Composable
+private fun SyncedRow(entry: SyncedDomain, allowed: Boolean, onAllow: () -> Unit) {
+    Column {
+        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(entry.domain, style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    BlocklistSources.label(entry.source),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (allowed) {
+                Text("In whitelist", style = MaterialTheme.typography.bodySmall, color = SafeGreen)
+            } else {
+                TextButton(onClick = onAllow) { Text("Consenti") }
+            }
         }
         HorizontalDivider()
     }

@@ -11,11 +11,16 @@ import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
 import com.zerobet.safeguard.data.BankPreset
 import com.zerobet.safeguard.data.BlockedDomain
 import com.zerobet.safeguard.data.SyncStatus
+import com.zerobet.safeguard.data.SyncedDomain
 import com.zerobet.safeguard.data.WhitelistedBank
 import com.zerobet.safeguard.guard.SettingsGuardAccessibilityService
 import com.zerobet.safeguard.security.PinManager
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -32,6 +37,7 @@ data class PermissionState(val vpn: Boolean, val deviceAdmin: Boolean, val acces
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repository = (app as SafeGuardApp).repository
@@ -48,6 +54,37 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     val syncStatus: StateFlow<List<SyncStatus>> =
         repository.syncStatus.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ---- Domini delle liste esterne: sono centinaia di migliaia, quindi si caricano a pagine ----
+
+    /** Testo cercato nella blacklist (già ripulito: solo caratteri validi in un dominio). */
+    val blacklistQuery = MutableStateFlow("")
+    private val syncedLimit = MutableStateFlow(SYNCED_PAGE)
+
+    val syncedCount: StateFlow<Int> =
+        repository.syncedCount.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val synced: StateFlow<List<SyncedDomain>> =
+        combine(blacklistQuery, syncedLimit) { query, limit -> query to limit }
+            .flatMapLatest { (query, limit) -> repository.synced(query, limit) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val syncedMatches: StateFlow<Int> =
+        blacklistQuery.flatMapLatest { repository.syncedMatches(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    fun searchBlacklist(raw: String) {
+        blacklistQuery.value = raw.lowercase().filter { it.isLetterOrDigit() || it == '.' || it == '-' }.take(60)
+        syncedLimit.value = SYNCED_PAGE
+    }
+
+    fun showMoreSynced() {
+        syncedLimit.value += SYNCED_PAGE
+    }
+
+    fun allowSynced(domain: SyncedDomain) = viewModelScope.launch {
+        repository.allowSynced(domain)
+    }
 
     fun removeLearned(domain: AutoLearnedBlockedDomain) = viewModelScope.launch {
         repository.removeLearned(domain)
@@ -78,5 +115,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeBlocked(domain: BlockedDomain) = viewModelScope.launch {
         repository.removeBlocked(domain)
+    }
+
+    private companion object {
+        const val SYNCED_PAGE = 200
     }
 }
