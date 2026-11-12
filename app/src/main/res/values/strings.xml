@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">SafeGuard</string>
+    <string name="accessibility_service_label">SafeGuard – Guardiano Impostazioni</string>
+    <string name="accessibility_service_description">Impedisce che la protezione SafeGuard venga disattivata o disinstallata senza il PIN del tutore. Il servizio osserva solo l\'apertura delle schermate delle Impostazioni di sistema relative a SafeGuard e non raccoglie né trasmette alcun dato.</string>
+    <string name="device_admin_description">Impedisce la disinstallazione di SafeGuard senza il PIN del tutore.</string>
+    <string name="device_admin_disable_warning">La disattivazione rimuove la protezione anti-disinstallazione di SafeGuard. È richiesto il PIN del tutore.</string>
+    <string name="vpn_notification_channel">Protezione attiva</string>
+    <string name="vpn_notification_title">SafeGuard è attivo</string>
+    <string name="vpn_notification_text">Filtro DNS locale in funzione</string>
+</resources>
