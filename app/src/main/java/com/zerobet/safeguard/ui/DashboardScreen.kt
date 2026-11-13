@@ -33,7 +33,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,7 +59,10 @@ import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
 import com.zerobet.safeguard.data.BlockedDomain
 import com.zerobet.safeguard.data.Category
 import com.zerobet.safeguard.data.WhitelistedBank
+import com.zerobet.safeguard.data.SecurityEventLog
+import com.zerobet.safeguard.data.Severity
 import com.zerobet.safeguard.data.SyncStatus
+import com.zerobet.safeguard.guard.IntegrityChecker
 import com.zerobet.safeguard.data.SyncedDomain
 import com.zerobet.safeguard.guard.GuardState
 import com.zerobet.safeguard.sync.BlocklistSources
@@ -90,6 +95,13 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
     val syncRunning by SyncState.running.collectAsStateWithLifecycle()
     val syncProgress by SyncState.progress.collectAsStateWithLifecycle()
     var privateDnsForced by remember { mutableStateOf(isPrivateDnsForced(context)) }
+    var batteryExempt by remember { mutableStateOf(IntegrityChecker.isIgnoringBatteryOptimizations(context)) }
+    val logEvents by vm.logEvents.collectAsStateWithLifecycle()
+    val logCount by vm.logCount.collectAsStateWithLifecycle()
+    val logFilter by vm.logFilter.collectAsStateWithLifecycle()
+    val criticalUnseen by vm.criticalUnseen.collectAsStateWithLifecycle()
+    val logHighlightSince by vm.logHighlightSince.collectAsStateWithLifecycle()
+    var showClearLogDialog by remember { mutableStateOf(false) }
 
     var permissions by remember { mutableStateOf(PermissionState.read(context)) }
     var tab by rememberSaveable { mutableIntStateOf(0) }
@@ -98,6 +110,7 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permissions = PermissionState.read(context)
         privateDnsForced = isPrivateDnsForced(context)
+        batteryExempt = IntegrityChecker.isIgnoringBatteryOptimizations(context)
         // Se la protezione dovrebbe essere attiva ma il servizio non gira (es. dopo un crash), lo riavvia.
         if (vm.pinManager.protectionEnabled && permissions.vpn && !DomainBlockerVpnService.running.value) {
             DomainBlockerVpnService.start(context)
@@ -220,6 +233,28 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
             }
         }
 
+        // ---- Risparmio energetico: il sistema può sospendere filtro e Guardiano ----
+        if (!batteryExempt) {
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Risparmio energetico attivo", fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "Android può sospendere SafeGuard quando il telefono è inattivo. Escludi l'app " +
+                                "dall'ottimizzazione della batteria.",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        OutlinedButton(onClick = { openSystemScreen(batteryExemptionIntent(context)) }) {
+                            Text("Escludi dal risparmio energetico")
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Aggiornamento delle liste esterne ----
         item {
             SyncCard(
@@ -232,10 +267,20 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
 
         // ---- Whitelist / Blacklist / Auto-appresi ----
         item {
-            TabRow(selectedTabIndex = tab) {
+            ScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
                 Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Whitelist (${whitelist.size})") })
                 Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Blacklist (${blocked.size + syncedCount})") })
                 Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Appresi (${learned.size})") })
+                Tab(
+                    selected = tab == 3,
+                    onClick = { tab = 3; vm.markLogSeen() },
+                    text = {
+                        // Badge: eventi critici avvenuti dall'ultimo accesso del tutore al registro.
+                        BadgedBox(badge = { if (criticalUnseen > 0) Badge { Text("$criticalUnseen") } }) {
+                            Text("Registro Allarmi")
+                        }
+                    }
+                )
             }
         }
 
@@ -246,6 +291,34 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
             }
             items(whitelist, key = { "w${it.id}" }) { bank ->
                 DomainRow(title = bank.domain, subtitle = bank.name, onRemove = { vm.removeWhitelisted(bank) })
+            }
+        } else if (tab == 3) {
+            item {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Tutti", "Manomissione / SIM", "Ricerche bloccate", "Domini bloccati").forEachIndexed { i, label ->
+                        FilterChip(selected = logFilter == i, onClick = { vm.logFilter.value = i }, label = { Text(label) })
+                    }
+                }
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "$logCount eventi registrati" + if (logEvents.size >= 300) " · mostrati gli ultimi 300" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { showClearLogDialog = true }, enabled = logCount > 0) { Text("Svuota registro") }
+                }
+            }
+            if (logEvents.isEmpty()) {
+                item { Text("Nessun evento per questo filtro.", Modifier.padding(vertical = 8.dp)) }
+            }
+            items(logEvents, key = { "e${it.id}" }) { event ->
+                EventRow(event, isNew = event.timestamp > logHighlightSince)
             }
         } else if (tab == 2) {
             item {
@@ -342,6 +415,25 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
             ) { Text("Sblocca Disinstallazione") }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showClearLogDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearLogDialog = false },
+            title = { Text("Svuotare il Registro Allarmi?") },
+            text = {
+                Text(
+                    "Tutti i $logCount eventi verranno eliminati in modo definitivo e non potranno essere " +
+                        "recuperati. Nel registro resterà traccia della pulizia."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showClearLogDialog = false; vm.clearLog() }) {
+                    Text("Svuota", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { showClearLogDialog = false }) { Text("Annulla") } }
+        )
     }
 
     if (showUninstallDialog) {
@@ -531,6 +623,47 @@ private fun LearnedRow(entry: AutoLearnedBlockedDomain, onAllow: () -> Unit, onR
             }
             TextButton(onClick = onAllow) { Text("Consenti") }
             TextButton(onClick = onRemove) { Text("Rimuovi") }
+        }
+        HorizontalDivider()
+    }
+}
+
+/** Riga del Registro Allarmi: gravità (colore), ora, titolo, dettagli e contatore delle ripetizioni. */
+@Composable
+private fun EventRow(event: SecurityEventLog, isNew: Boolean) {
+    val formatter = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.MEDIUM) }
+    val color = when (event.severity) {
+        Severity.CRITICAL -> MaterialTheme.colorScheme.error
+        Severity.WARNING -> WarnAmber
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val label = when (event.severity) {
+        Severity.CRITICAL -> "CRITICO"
+        Severity.WARNING -> "ATTENZIONE"
+        else -> "INFO"
+    }
+    Column {
+        Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = color)
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    formatter.format(Date(event.timestamp)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                if (isNew && event.severity == Severity.CRITICAL) {
+                    Text("NUOVO", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = color)
+                }
+            }
+            Text(
+                if (event.count > 1) "${event.title}  x${event.count}" else event.title,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            if (event.detail.isNotEmpty()) {
+                Text(event.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         HorizontalDivider()
     }

@@ -1,0 +1,572 @@
+# Ricerche innocue che NON devono mai essere bloccate. Una per riga; le righe con # sono commenti.
+# --- frasi con sottostringhe o parole ingannevoli (richieste esplicitamente)
+azioni legali
+azioni di gioco
+quotazione oro usato
+quote latte
+quote rosa
+scommessa vinta con gli amici
+prestito bibliotecario
+prestito d'onore studentesco
+mutuo consenso
+leva cambio auto
+leva militare
+fisica leva di primo genere
+margini di pagina word
+spread spalmabile
+casino Royale film
+che casino oggi
+fare un poker di gol
+roulette russa film
+cripta della chiesa
+crittografia asimmetrica
+bond james bond
+obbligazioni contrattuali
+interessi legali
+interessi personali
+# --- azioni / azione
+azioni correttive iso 9001
+azioni legali contro il condominio
+azioni positive pari opportunità
+azioni di marketing
+azioni di contrasto alla povertà
+azioni cattoliche ragazzi
+azione di sfratto
+azione penale obbligatoria
+azione revocatoria
+azioni salienti partita
+le più belle azioni di gioco del basket
+azioni possessorie
+piano di azione locale
+film d'azione 2026
+giochi d'azione ps5
+azioni quotidiane per l'ambiente
+azione collettiva consumatori
+# --- quota / quote / quotazione
+quota 103 pensione
+quota 41 precoci
+quota associativa annuale
+quota iscrizione asilo
+quota condominiale
+quota di legittima eredità
+quota neve alpi
+quota altimetrica monte bianco
+quote disegno tecnico
+quote ereditarie fratelli
+quote societarie srl cessione
+quote di partecipazione gita
+quote tonno pesca
+quotazione auto usate quattroruote
+quotazione moto usata
+quotazione francobolli rari
+quotazioni fantacalcio
+quotazione rottami ferro
+quotazione gasolio riscaldamento
+famous movie quotes
+inspirational quotes
+# --- scommessa (singolare, senso comune)
+la scommessa di pascal
+ho perso una scommessa con mio fratello
+scommessa tra amici idee
+una scommessa sul futuro dei giovani
+la grande scommessa film
+scommessa educativa
+# --- prestito (calcio, biblioteche, lingua)
+giocatore in prestito
+prestito con diritto di riscatto
+prestito con obbligo di riscatto
+prestito secco calciomercato
+libri in prestito biblioteca
+prestito interbibliotecario
+prestito libri digitali
+prestito ebook biblioteca
+prestito linguistico esempi
+prestiti linguistici dall'inglese
+attaccante in prestito alla roma
+oggetti in prestito
+dare in prestito un libro
+on loan from
+loan words in english
+# --- mutuo (aggettivo)
+mutuo soccorso
+società di mutuo soccorso
+mutuo consenso divorzio
+gruppi di mutuo aiuto
+mutuo rispetto
+mutuo accordo tra le parti
+mutuo riconoscimento titoli
+mutuo insegnamento
+# --- leva / margini / spread
+leva del freno bici
+leva frizione moto
+leva obbligatoria storia
+leva di secondo genere esempi
+leva calcistica della classe 68
+leva del cambio manuale
+margini di errore statistica
+margini di miglioramento
+margini foglio a4
+margini di manovra
+spread formaggio ricetta
+spread di cioccolato
+spread the word significato
+bed spread king size
+# --- casino (confusione) e cinema
+che casino
+che casino ragazzi
+un casino di gente
+fare casino significato
+casino royale daniel craig
+casino royale colonna sonora
+ho fatto un casino
+# --- poker / roulette (sport e cinema)
+poker di gol in serie a
+poker di haaland
+cala il poker la juventus
+poker face lady gaga testo
+poker face serie tv
+roulette russa
+roulette russa significato
+russian roulette rihanna
+# --- cripta / crittografia / codici
+cripta dei cappuccini
+cripta di san sepolcro
+cripte romaniche
+crittografia rsa
+crittografia a chiave pubblica
+crittoanalisi
+cryptography course
+criptare file zip
+criptato significato
+# --- bond / obbligazioni / interessi (sensi non finanziari)
+james bond film in ordine
+bond girl
+legame covalente bond
+bonding dentale
+obbligazioni naturali diritto
+obbligazioni solidali diritto privato
+libro delle obbligazioni
+interessi culturali
+interessi di mora calcolo
+interessi e hobby curriculum
+conflitto di interessi
+centro di interessi vitali
+# --- investire / investimento (incidenti, incarichi)
+investigatore privato
+investigatore privato costi
+investigazione scientifica
+investigazioni forensi
+investito da un'auto
+investito sulle strisce
+investitura feudale
+investitura cavaliere
+investimento pedone
+investimento stradale oggi
+investimento ferroviario ritardo treni
+investimento di un pedone risarcimento
+# --- bet / tan / rata / puntata / slot (sottostringhe)
+betulla albero
+betulla bianca
+betoniera prezzo
+betoniera a bicchiere
+alfabeto greco
+alfabeto fonetico nato
+alphabet song
+tibet viaggio
+tibetano mastino
+bettola osteria
+better call saul
+better days testo
+diabete sintomi
+sherbet recipe
+sorbetto al limone
+gabinetto medico
+distanza terra luna
+tanto tempo fa
+tana libera tutti
+tangenziale est traffico
+tango argentino corsi
+ratatouille film
+pirata dei caraibi
+grata in ferro
+rata condominio scadenza
+rate universitarie scadenze
+pagare a rate le tasse
+rateizzazione cartella esattoriale
+puntata grande fratello
+ultima puntata del paradiso delle signore
+puntate masterchef streaming
+prossima puntata report
+slot prenotazione vaccino
+slot pcie scheda madre
+slot m.2 nvme
+time slot meaning
+slot orario consegna spesa
+slot di memoria ram
+slot aeroportuali
+# --- borsa / banco / oro / tasso / titoli / mercato / stock / fondi
+borsa di studio
+borsa di studio regionale
+borsa in pelle
+borsa frigo
+borsa dell'acqua calda
+borsa da palestra
+borsa termica
+borsa a tracolla uomo
+banco di scuola
+banco alimentare
+banco da lavoro
+banco di nebbia
+banco del mutuo soccorso
+oro olimpiadi
+medaglia d'oro
+oro bianco o giallo
+pesce d'oro
+tasso di natalità
+tasso animale
+tasso alcolemico limite
+tasso di disoccupazione giovanile
+titoli di coda
+titolo di studio
+titoli nobiliari
+titoli di giornale oggi
+mercato rionale
+mercato del pesce
+mercato coperto
+mercatini di natale
+calciomercato
+calciomercato milan
+stock di magazzino
+stock foto gratis
+stock fotografico
+fondi di caffè
+fondo schiena
+fondi europei per la scuola
+fondo pensione
+# --- demo / conto / opzioni / token / monete
+demo gioco ps5
+demo fifa
+conto alla rovescia capodanno
+conto termico
+opzioni sviluppatore android
+opzioni risparmio energia windows
+token autenticazione
+token spid
+moneta da 2 euro rara
+monete antiche romane
+coin master
+# --- finanza pubblica, parole simili
+legge finanziaria 2026
+manovra finanziaria
+guardia di finanza
+guardia di finanza concorso
+educazione finanziaria scuola
+finanziamento pubblico ai partiti
+finanziamenti europei ricerca
+ministero delle finanze
+finanza pubblica
+# --- omonimi
+tappeto in sisal
+corda sisal
+team cofidis
+cofidis ciclismo
+cfd fluidodinamica
+ansys cfd
+sclerosi multipla sintomi
+piatto tipico siciliano
+rabona tutorial
+wolf of wall street film
+immagine speculare
+ripple effect
+kraken mitologia
+pitagora filosofo
+teorema di pitagora
+bussola compass app
+eth zurigo
+gerolamo cardano
+giunto cardano
+airdrop iphone
+shiba inu cucciolo
+bot telegram
+pac man
+payday 3 gioco
+trading card game pokemon
+pokemon trading cards
+fair trade caffè
+world trade center
+trader joe's
+exchange student programma
+lotteria degli scontrini
+# --- giochi non d'azzardo
+fantacalcio voti
+monopoli regole
+tombola natale
+carte da gioco briscola
+scopa regole
+burraco regole
+scacchi online
+sudoku
+cruciverba
+giochi da tavolo famiglia
+dama italiana regole
+risiko regole
+solitario carte
+giochi per bambini
+puzzle 1000 pezzi
+# --- vita quotidiana
+meteo roma
+meteo domani milano
+meteo napoli weekend
+previsioni neve
+ricetta carbonara
+ricetta tiramisù
+ricetta lasagne
+ricetta pizza fatta in casa
+ricetta torta di mele
+pasta al forno
+orari treni
+trenitalia
+italo biglietti
+orari autobus atac
+farmacia di turno
+pizzeria vicino a me
+ristorante giapponese
+ristorante di pesce
+notizie oggi
+ultime notizie
+corriere della sera
+gazzetta dello sport
+risultati serie a
+classifica serie a
+calendario serie a
+juventus inter streaming
+formula 1 gran premio
+moto gp
+tour de france tappa
+giro d'italia percorso
+netflix serie tv
+film da vedere
+programmi tv stasera
+canzoni sanremo
+youtube musica
+spotify playlist
+traduttore inglese italiano
+wikipedia
+google maps
+codice fiscale calcolo
+spid poste
+inps accesso
+agenzia delle entrate
+730 precompilato
+bolletta enel
+offerte luce e gas
+offerte telefonia mobile
+iphone 17 prezzo
+samsung galaxy recensione
+amazon offerte
+ikea catalogo
+scarpe nike uomo
+zalando resi
+subito.it auto usate
+immobiliare affitto roma
+case in vendita milano
+offerte di lavoro
+curriculum vitae modello
+concorsi pubblici
+università iscrizione
+compiti di matematica
+divisione dividendo e divisore
+equazioni di secondo grado
+analisi logica frase
+frasi auguri compleanno
+oroscopo oggi
+santo del giorno
+calendario 2026
+voli low cost
+ryanair check in
+booking hotel rimini
+airbnb firenze
+sintomi influenza
+medico di base
+prenotazione visita cup
+dieta mediterranea
+allenamento a casa
+palestra orari
+cane segugio italiano
+gatto persiano
+veterinario
+giardinaggio rose
+bricolage mensole
+leroy merlin
+banca intesa accesso
+unicredit home banking
+bonifico istantaneo
+iban poste
+carta di credito smarrita
+saldo conto corrente
+pagare bollo auto
+pagopa
+assicurazione auto preventivo
+broker assicurativo
+revisione auto scadenza
+patente b quiz
+cambio gomme invernali
+ricarica telefonica
+passaporto rinnovo
+carta d'identità elettronica
+anagrafe certificati
+tari pagamento
+bonus psicologo domanda
+assegno unico importi
+naspi requisiti
+busta paga come leggerla
+ferie non godute
+permessi 104
+smart working regole
+orario scolastico
+registro elettronico
+libri di testo usati
+tesi di laurea indice
+erasmus requisiti
+come fare il pane
+lievito madre
+orto sul balcone
+potatura ulivo
+raccolta differenziata calendario
+isola ecologica orari
+idraulico pronto intervento
+elettricista
+caldaia manutenzione
+condizionatore offerte
+lavatrice classe a
+frigorifero combinato
+aspirapolvere senza fili
+smart tv 55 pollici
+cuffie bluetooth
+stampante laser
+come fare uno screenshot
+recuperare password gmail
+whatsapp web
+instagram accesso
+tiktok tendenze
+canzone del momento
+testo canzone
+accordi chitarra
+concerti milano
+biglietti teatro
+cinema programmazione
+mostra van gogh
+museo egizio torino
+spiagge sardegna
+trekking dolomiti
+piste ciclabili
+campeggio toscana
+terme saturnia
+mercatino dell'usato
+regali di natale
+idee regalo mamma
+biglietto auguri matrimonio
+abito da sposa
+bomboniere
+nomi maschili
+nomi femminili
+gravidanza settimane
+svezzamento
+pediatra
+asilo nido iscrizioni
+cartoni animati
+favole per bambini
+disegni da colorare
+# --- english
+weather london
+best pizza recipe
+how to tie a tie
+cheap flights
+train tickets
+football scores
+premier league table
+nba standings
+movie times
+new music releases
+translate english to italian
+how to learn guitar
+running shoes
+laptop reviews
+phone repair near me
+job interview tips
+resume template
+healthy breakfast ideas
+yoga for beginners
+dog training tips
+garden design ideas
+home workout
+car insurance quote
+student exchange program
+library book loan renewal
+on loan player transfer news
+trade union history
+fair trade chocolate
+world trade organization
+trading cards value
+poker face meaning
+russian roulette song
+casino royale cast
+james bond movies
+bonding time with family
+stock photos free
+stock cube recipe
+chicken stock
+laughing stock meaning
+out of stock
+market street san francisco
+farmers market near me
+christmas market
+bet you can't do this challenge
+i bet you think about me lyrics
+you bet meaning
+alphabet for kids
+better than yesterday
+slot car racing
+mail slot
+time slot booking
+coin collection for kids
+coin laundry near me
+flip a coin
+token of appreciation
+option key on mac
+options menu
+future tense english
+futures of education
+forecast tomorrow
+share the love quotes
+share location iphone
+interest in art
+places of interest
+credit to the author
+credits film
+extra credit assignment
+bank holiday dates
+river bank
+power bank best
+blood bank near me
+food bank volunteer
+gold medal winners
+golden retriever puppies
+silver lining meaning
+exchange rate explained for school
+gift exchange ideas
+margin css
+margin notes
+leverage meaning in physics
+spread butter
+bedspread
+bull terrier
+bear grylls
+hedge trimming
+hedgehog care
+broker meaning in insurance
+yield sign
+dividend in division
+principal of school
+capital of france
+capital letters

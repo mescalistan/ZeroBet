@@ -22,7 +22,10 @@ import java.security.SecureRandom
 class PinManager(context: Context) {
 
     private val prefs: SharedPreferences = run {
-        val appContext = context.applicationContext
+        // Storage "device protected": il PIN e lo stato della protezione devono essere leggibili
+        // subito dopo l'accensione, prima dello sblocco dello schermo (Direct Boot). La chiave
+        // nel Keystore non richiede l'autenticazione dell'utente, quindi è disponibile anch'essa.
+        val appContext = DeviceStorage.context(context)
         val masterKey = MasterKey.Builder(appContext)
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
@@ -34,6 +37,9 @@ class PinManager(context: Context) {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
     }
+
+    /** Chiamata a ogni PIN errato con il numero del tentativo e true se è scattato il blocco temporaneo. */
+    var onWrongPin: ((attempt: Int, locked: Boolean) -> Unit)? = null
 
     val isPinSet: Boolean
         get() = prefs.contains(KEY_HASH) && prefs.contains(KEY_SALT)
@@ -74,6 +80,7 @@ class PinManager(context: Context) {
                 editor.putLong(KEY_LOCK_UNTIL, System.currentTimeMillis() + lockMs)
             }
             editor.apply()
+            onWrongPin?.invoke(failed, failed >= MAX_ATTEMPTS)
         }
         return ok
     }
@@ -97,7 +104,7 @@ class PinManager(context: Context) {
     companion object {
         const val PIN_LENGTH = 6
         private const val MAX_ATTEMPTS = 5
-        private const val FILE_NAME = "safeguard_secure_prefs"
+        private const val FILE_NAME = DeviceStorage.SECURE_PREFS
         private const val KEY_HASH = "pin_hash"
         private const val KEY_SALT = "pin_salt"
         private const val KEY_FAILED = "pin_failed_attempts"

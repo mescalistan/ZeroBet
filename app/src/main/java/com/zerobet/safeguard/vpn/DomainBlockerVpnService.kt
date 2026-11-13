@@ -24,8 +24,11 @@ import java.io.FileOutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import com.zerobet.safeguard.security.SecurityLog
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
 /**
@@ -48,6 +51,7 @@ class DomainBlockerVpnService : VpnService() {
 
     /** Filtro condiviso a livello di processo, sempre allineato al DB (vedi FilterStore). */
     private lateinit var filterStore: FilterStore
+    private lateinit var securityLog: SecurityLog
     @Volatile private var tun: ParcelFileDescriptor? = null
     private var tunOutput: FileOutputStream? = null
     private val writeLock = Any()
@@ -59,6 +63,7 @@ class DomainBlockerVpnService : VpnService() {
         // Lo snapshot di whitelist, blacklist, domini auto-appresi e fonti esterne è mantenuto
         // dal FilterStore: ogni modifica è attiva immediatamente, senza riavviare la VPN.
         filterStore = (application as SafeGuardApp).filterStore
+        securityLog = (application as SafeGuardApp).securityLog
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -106,7 +111,13 @@ class DomainBlockerVpnService : VpnService() {
         }
         tun = pfd
         tunOutput = FileOutputStream(pfd.fileDescriptor)
-        forwardPool = Executors.newFixedThreadPool(FORWARD_THREADS)
+        // I thread di inoltro si chiudono da soli dopo 30 secondi di inattività.
+        forwardPool = ThreadPoolExecutor(
+            FORWARD_THREADS, FORWARD_THREADS, 30, TimeUnit.SECONDS, LinkedBlockingQueue(FORWARD_QUEUE)
+        ).apply {
+            allowCoreThreadTimeOut(true)
+            rejectedExecutionHandler = ThreadPoolExecutor.DiscardOldestPolicy()
+        }
         readerThread = thread(name = "safeguard-dns-reader") { readLoop(pfd) }
         _running.value = true
         Log.i(TAG, "Filtro DNS avviato")
@@ -118,8 +129,14 @@ class DomainBlockerVpnService : VpnService() {
         val packet = ByteArray(MTU)
         try {
             while (!Thread.currentThread().isInterrupted) {
-                val length = input.read(packet)   // bloccante; lancia IOException alla chiusura della TUN
-                if (length <= 0) continue
+                // Lettura BLOCCANTE (la TUN è aperta con setBlocking(true)): senza traffico DNS il
+                // thread dorme nel kernel e non consuma CPU, anche a schermo spento.
+                val length = input.read(packet)   // lancia IOException alla chiusura della TUN
+                if (length < 0) break             // fine del flusso: mai girare a vuoto
+                if (length == 0) {                // non dovrebbe accadere con I/O bloccante
+                    Thread.sleep(50)
+                    continue
+                }
                 try {
                     handlePacket(packet, length)
                 } catch (e: Exception) {
@@ -153,6 +170,8 @@ class DomainBlockerVpnService : VpnService() {
             }
             verdict.blocked -> {
                 _blockedCount.value += 1
+                // Registro Allarmi: una riga per dominio al minuto, con contatore (vedi SecurityLog).
+                securityLog.domainBlocked(question.name, blockReasonLabel(verdict.reason))
                 // Auto-alimentazione: un dominio bloccato dall'euristica viene salvato tra gli
                 // "auto-appresi", così resta in lista (ed è visibile al tutore nella dashboard).
                 if (verdict.reason == BlockReason.HEURISTIC) {
@@ -191,6 +210,12 @@ class DomainBlockerVpnService : VpnService() {
                 }
             }
         }
+    }
+
+    private fun blockReasonLabel(reason: BlockReason?): String = when (reason) {
+        BlockReason.KEYWORD -> "Parola chiave nel nome"
+        BlockReason.HEURISTIC -> "Nome a rischio (euristica)"
+        else -> "Dominio in blacklist"
     }
 
     /** Scrive sulla TUN una risposta DNS, scambiando indirizzi e porte rispetto alla query. */
@@ -269,6 +294,7 @@ class DomainBlockerVpnService : VpnService() {
         private const val UPSTREAM_TIMEOUT_MS = 3000
         private const val DNS_PORT = 53
         private const val FORWARD_THREADS = 8
+        private const val FORWARD_QUEUE = 256
 
         /** MTU ampia: le risposte DNS con EDNS possono superare i classici 1500 byte. */
         private const val MTU = 8192

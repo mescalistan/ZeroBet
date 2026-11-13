@@ -23,25 +23,25 @@ class Verdict(val reason: BlockReason?, val score: Int = 0) {
  * Snapshot immutabile delle regole, tenuto in memoria e ricostruito quando il DB cambia
  * (vedi [FilterStore]).
  *
- * Costo per query DNS: lookup in HashSet, quindi O(1) per il match esatto e O(numero di label)
- * per il match sui domini padre (un nome ha 2-5 label), indipendentemente dal fatto che le
- * liste contengano cento o centinaia di migliaia di domini. Parole chiave ed euristica vengono
- * valutate solo per i nomi che non sono già in lista.
+ * Costo per query DNS: le liste piccole (whitelist, regole del tutore, auto-appresi) sono HashSet,
+ * quelle esterne (centinaia di migliaia di voci) sono un [HashedDomainSet], cioè un array ordinato
+ * di hash a 64 bit: una ricerca binaria per label, senza allocazioni e con 8 byte per dominio.
+ * Parole chiave ed euristica vengono valutate solo per i nomi che non sono già in lista.
  */
 class DomainFilter(
     private val whitelist: Set<String>,
     /** Blacklist "locale": voci predefinite, aggiunte dal tutore e domini auto-appresi. */
     private val blockedDomains: Set<String>,
     private val keywords: List<String>,
-    /** Domini delle fonti esterne (set condiviso, non copiato: può essere molto grande). */
-    private val external: Set<String> = emptySet(),
+    /** Domini delle fonti esterne, in forma compatta. */
+    private val external: HashedDomainSet = HashedDomainSet.EMPTY,
     private val heuristicsEnabled: Boolean = true
 ) {
     constructor(
         whitelisted: List<WhitelistedBank>,
         blocked: List<BlockedDomain>,
         learned: List<AutoLearnedBlockedDomain> = emptyList(),
-        external: Set<String> = emptySet()
+        external: HashedDomainSet = HashedDomainSet.EMPTY
     ) : this(
         whitelist = whitelisted.mapTo(HashSet()) { it.domain },
         blockedDomains = HashSet<String>().apply {
@@ -63,7 +63,7 @@ class DomainFilter(
         val domain = normalize(rawDomain)
         if (domain.isEmpty()) return Verdict.ALLOW
         if (matches(whitelist, domain)) return Verdict.ALLOW
-        if (matches(blockedDomains, domain) || matches(external, domain)) return Verdict(BlockReason.LIST)
+        if (matches(blockedDomains, domain) || external.matches(domain)) return Verdict(BlockReason.LIST)
         return checkRules(domain)
     }
 

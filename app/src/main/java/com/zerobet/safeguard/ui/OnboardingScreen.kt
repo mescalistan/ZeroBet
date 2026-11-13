@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.zerobet.safeguard.admin.SafeGuardDeviceAdminReceiver
+import com.zerobet.safeguard.guard.IntegrityChecker
 import com.zerobet.safeguard.data.DefaultData
 import com.zerobet.safeguard.ui.components.PinPad
 import com.zerobet.safeguard.ui.theme.SafeGreen
@@ -183,11 +184,20 @@ private fun BankStep(vm: MainViewModel, onDone: () -> Unit) {
 // -------------------------------------------------------------------------------------------
 // Passo 3: concessione dei tre permessi di sistema
 // -------------------------------------------------------------------------------------------
+/** Dialogo di sistema che chiede di escludere l'app dal risparmio energetico (Doze). */
+@android.annotation.SuppressLint("BatteryLife")
+fun batteryExemptionIntent(context: android.content.Context): Intent =
+    Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, android.net.Uri.parse("package:${context.packageName}"))
+
 @Composable
 private fun PermissionsStep(vm: MainViewModel, onFinished: () -> Unit) {
     val context = LocalContext.current
     var state by remember { mutableStateOf(PermissionState.read(context)) }
-    val refresh = { state = PermissionState.read(context) }
+    var batteryExempt by remember { mutableStateOf(IntegrityChecker.isIgnoringBatteryOptimizations(context)) }
+    val refresh = {
+        state = PermissionState.read(context)
+        batteryExempt = IntegrityChecker.isIgnoringBatteryOptimizations(context)
+    }
 
     // I permessi vengono concessi in schermate di sistema: al rientro si rilegge lo stato.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refresh() }
@@ -227,6 +237,12 @@ private fun PermissionsStep(vm: MainViewModel, onFinished: () -> Unit) {
             description = "Chiede il PIN quando qualcuno apre le Impostazioni per disattivare SafeGuard e legge i testi visibili in browser e app per bloccare pagine e annunci di scommesse, trading e prestiti. L'analisi avviene solo sul telefono: nulla viene salvato o inviato. Nell'elenco scegli \"SafeGuard – Guardiano Impostazioni\" e attivalo.",
             granted = state.accessibility,
             onGrant = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        )
+        PermissionCard(
+            title = "4. Nessun risparmio energetico (consigliato)",
+            description = "Esclude SafeGuard dall'ottimizzazione della batteria, così Android non sospende mai il filtro e il Guardiano quando il telefono è inattivo. Il consumo dell'app resta minimo.",
+            granted = batteryExempt,
+            onGrant = { context.startActivity(batteryExemptionIntent(context)) }
         )
         Spacer(Modifier.height(4.dp))
         Button(

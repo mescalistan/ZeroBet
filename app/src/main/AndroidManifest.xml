@@ -14,6 +14,12 @@
     <!-- Riavvio automatico della protezione all'accensione -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
+    <!-- Esenzione dal risparmio energetico (Doze): il sistema non deve sospendere VPN e Guardiano -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- Schermata di blocco a tutto schermo quando un servizio obbligatorio viene trovato spento -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <!-- Necessario per lanciare la richiesta di disinstallazione dalla dashboard -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
 
@@ -27,6 +33,7 @@
 
     <application
         android:name=".SafeGuardApp"
+        android:directBootAware="true"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="false"
@@ -51,6 +58,8 @@
         <!-- Schermata di blocco a tutto schermo mostrata dal Guardiano Impostazioni -->
         <activity
             android:name=".ui.LockScreenActivity"
+            android:directBootAware="true"
+            android:showWhenLocked="false"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleTask"
@@ -61,6 +70,7 @@
         <!-- Modulo 2: VPN locale che intercetta solo il DNS -->
         <service
             android:name=".vpn.DomainBlockerVpnService"
+            android:directBootAware="true"
             android:exported="false"
             android:foregroundServiceType="systemExempted"
             android:permission="android.permission.BIND_VPN_SERVICE">
@@ -75,6 +85,7 @@
         <!-- Guardiano Impostazioni + blocco dei contenuti a schermo con auto-apprendimento -->
         <service
             android:name=".guard.SettingsGuardAccessibilityService"
+            android:directBootAware="true"
             android:exported="true"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
@@ -89,6 +100,7 @@
         <!-- Modulo 3: Device Admin (blocca la disinstallazione standard) -->
         <receiver
             android:name=".admin.SafeGuardDeviceAdminReceiver"
+            android:directBootAware="true"
             android:description="@string/device_admin_description"
             android:exported="true"
             android:label="@string/app_name"
@@ -104,11 +116,24 @@
         <!-- Modulo 3: auto-riavvio al boot e dopo un aggiornamento dell'app -->
         <receiver
             android:name=".receiver.BootReceiver"
+            android:directBootAware="true"
             android:exported="true">
             <intent-filter>
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Registro Allarmi: rimozione/inserimento della SIM e cambio operatore, anche a schermo bloccato -->
+        <receiver
+            android:name=".receiver.SimStateReceiver"
+            android:directBootAware="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.SIM_STATE_CHANGED" />
+                <action android:name="android.telephony.action.CARRIER_CONFIG_CHANGED" />
             </intent-filter>
         </receiver>
     </application>

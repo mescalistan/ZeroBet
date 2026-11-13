@@ -40,8 +40,9 @@ interface DomainDao {
     @Query("SELECT COUNT(*) FROM synced_domains WHERE source = :source")
     suspend fun countSynced(source: String): Int
 
+    /** Cursore su tutti i domini esterni: letti uno alla volta, senza creare una lista in memoria. */
     @Query("SELECT domain FROM synced_domains")
-    suspend fun allSyncedDomains(): List<String>
+    fun syncedDomainCursor(): android.database.Cursor
 
     @Query("SELECT COUNT(*) FROM synced_domains")
     fun observeSyncedCount(): Flow<Int>

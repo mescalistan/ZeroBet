@@ -14,6 +14,8 @@ import android.widget.Toast
 import com.zerobet.safeguard.R
 import com.zerobet.safeguard.SafeGuardApp
 import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
+import com.zerobet.safeguard.data.EventType
+import com.zerobet.safeguard.data.Severity
 import com.zerobet.safeguard.data.DomainRepository
 import com.zerobet.safeguard.ui.LockScreenActivity
 import com.zerobet.safeguard.vpn.SafeDomains
@@ -32,7 +34,7 @@ import com.zerobet.safeguard.vpn.SafeDomains
  *    mostra la LockScreenActivity che richiede il PIN del tutore; senza PIN si torna alla Home.
  *
  * 2) BLOCCO DEI CONTENUTI A SCHERMO E AUTO-APPRENDIMENTO
- *    Nei browser e nelle altre app legge i testi visibili e, se riconosce una combinazione ad
+ *    Nei browser e nelle app di ricerca legge i testi visibili e, se riconosce una combinazione ad
  *    alta confidenza di espressioni su scommesse, trading o prestiti (vedi ContentClassifier),
  *    torna indietro. Se la pagina è un sito esterno aperto nel browser, il suo dominio viene
  *    aggiunto ai "domini auto-appresi" e da quel momento è bloccato anche a livello DNS.
@@ -52,7 +54,14 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private var ignoredPackages: Set<String> = emptySet()
 
     private var lastLockAt = 0L
-    private var lastContentScanAt = 0L
+    private var lastIntegrityAt = 0L
+    private var pendingPackage: String? = null
+    private var pendingSince = 0L
+
+    // Cache dell'ultima schermata analizzata: se la barra degli indirizzi non è cambiata e la
+    // pagina ha finito di caricarsi, l'albero dei nodi non viene più attraversato.
+    private var lastScanKey: String? = null
+    private var lastScanKeyAt = 0L
     private var lastContentBlockAt = 0L
     private val handler = Handler(Looper.getMainLooper())
 
@@ -68,8 +77,10 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         app = application as SafeGuardApp
         appLabel = getString(R.string.app_name).lowercase()
         ignoredPackages = buildIgnoredPackages()
-        // Nessun filtro per package: servono gli eventi di browser e app, oltre alle Impostazioni.
-        serviceInfo = serviceInfo.apply { packageNames = null }
+        // Filtro a livello di sistema: Android consegna al servizio SOLO gli eventi di Impostazioni,
+        // installer, browser e app di ricerca. Per tutte le altre app il servizio non viene
+        // nemmeno svegliato: zero CPU e zero batteria mentre si usano giochi, social, video...
+        serviceInfo = serviceInfo.apply { packageNames = RELEVANT_PACKAGES.toTypedArray() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -78,22 +89,57 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
         ) return
         val pkg = event.packageName?.toString() ?: return
-        if (pkg in ignoredPackages) return
+        // Scarto in O(1) di tutto ciò che non è Impostazioni, browser o app di ricerca (difesa in
+        // profondità: il filtro di sistema impostato in onServiceConnected fa già lo stesso).
+        if (pkg !in RELEVANT_PACKAGES || pkg in ignoredPackages) return
 
         val now = SystemClock.elapsedRealtime()
         refreshFlags(now)
+        if (onboardingDone && now - lastIntegrityAt >= INTEGRITY_INTERVAL_MS) {
+            lastIntegrityAt = now
+            IntegrityChecker.check(this, "guardiano")
+        }
         // Attivo solo a wizard completato (durante l'onboarding il tutore deve poter concedere
         // i permessi) e in silenzio nella finestra di grazia concessa dal PIN.
         if (!onboardingDone || GuardState.inGrace || GuardState.lockScreenVisible) return
 
         if (pkg in SETTINGS_PACKAGES) {
-            if (now - lastLockAt >= RELOCK_THROTTLE_MS && isSensitiveScreen(event)) {
-                lastLockAt = now
-                showLockScreen()
+            if (now - lastLockAt < RELOCK_THROTTLE_MS) return
+            val screen = sensitiveScreen(event) ?: return
+            lastLockAt = now
+            // Registro Allarmi: i tentativi ripetuti sulla stessa schermata entro un minuto sono una riga sola.
+            app.securityLog.grouped(
+                "tamper:$screen", EventType.TAMPER, Severity.CRITICAL,
+                "Tentativo di aprire un'impostazione protetta", screen
+            )
+            showLockScreen()
+        } else if (protectionEnabled) {
+            scheduleScan(pkg, now)
+        }
+    }
+
+    /**
+     * Debounce: l'albero dei nodi viene letto solo quando la schermata è ferma da
+     * [SCAN_DEBOUNCE_MS] (una pagina che si carica genera decine di eventi al secondo), ma mai
+     * più tardi di [SCAN_MAX_WAIT_MS] dal primo evento in attesa.
+     */
+    private fun scheduleScan(pkg: String, now: Long) {
+        pendingPackage = pkg
+        if (pendingSince == 0L) pendingSince = now
+        handler.removeCallbacks(scanRunnable)
+        val waited = now - pendingSince
+        handler.postDelayed(scanRunnable, if (waited >= SCAN_MAX_WAIT_MS) 0L else SCAN_DEBOUNCE_MS)
+    }
+
+    private val scanRunnable = Runnable {
+        val pkg = pendingPackage
+        pendingSince = 0L
+        if (pkg != null && !GuardState.inGrace && !GuardState.lockScreenVisible) {
+            try {
+                inspectContent(pkg, SystemClock.elapsedRealtime())
+            } catch (e: Exception) {
+                android.util.Log.w("SafeGuardGuard", "Analisi della schermata fallita: ${e.message}")
             }
-        } else if (protectionEnabled && now - lastContentScanAt >= CONTENT_SCAN_INTERVAL_MS) {
-            lastContentScanAt = now
-            inspectContent(pkg, now)
         }
     }
 
@@ -109,10 +155,16 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     // ---------------------------------------------------------------------------------------
 
     /** Riconosce le schermate sensibili dal nome della classe della finestra e dai testi visibili. */
-    private fun isSensitiveScreen(event: AccessibilityEvent): Boolean {
+    private fun sensitiveScreen(event: AccessibilityEvent): String? {
         val className = event.className?.toString().orEmpty()
         // Nomi di Activity/Fragment AOSP: DeviceAdminSettings, DeviceAdminAdd, VpnSettings...
-        if (SENSITIVE_CLASS_HINTS.any { className.contains(it, ignoreCase = true) }) return true
+        SENSITIVE_CLASS_HINTS.firstOrNull { className.contains(it, ignoreCase = true) }?.let {
+            return when (it) {
+                "DeviceAdmin" -> "Amministratore dispositivo"
+                "VpnSettings" -> "Impostazioni VPN"
+                else -> "Disinstallazione di SafeGuard"
+            }
+        }
 
         val texts = StringBuilder()
         event.text.forEach { texts.append(it).append('\n') }
@@ -121,17 +173,26 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
 
         // Titoli che identificano da soli la schermata: "Amministratori dispositivo" e il
         // dialogo di scelta del DNS privato (non la semplice voce "DNS privato" nell'elenco Rete).
-        if (STANDALONE_TITLES.any { screen.contains(it) }) return true
+        STANDALONE_TITLES.firstOrNull { screen.contains(it) }?.let {
+            return if (it.contains("dns")) "DNS privato" else "Amministratori dispositivo"
+        }
 
         // Tutte le altre schermate sensibili mostrano il nome dell'app insieme a un'azione
         // o a un contesto pericoloso. Il solo nome (es. nell'elenco generale delle app) non basta.
-        if (!screen.contains(appLabel)) return false
+        if (!screen.contains(appLabel)) return null
         // La pagina generale "Rete e Internet" mostra la riga "VPN · SafeGuard" accanto a Wi-Fi,
         // hotspot, ecc.: lì "vpn" non conta, altrimenti l'utente non potrebbe più cambiare rete.
         // Restano protetti la pagina VPN vera e propria e il dialogo del DNS privato.
         val isNetworkDashboard = NETWORK_DASHBOARD_HINTS.any { screen.contains(it) }
-        return DANGEROUS_CONTEXT.any { context ->
+        val context = DANGEROUS_CONTEXT.firstOrNull { context ->
             screen.contains(context) && !(context == "vpn" && isNetworkDashboard)
+        } ?: return null
+        return when {
+            context == "vpn" -> "Impostazioni VPN"
+            context.startsWith("accessibilit") -> "Accessibilità di SafeGuard"
+            context == "disattiva" || context == "deactivate" -> "Amministratore dispositivo"
+            context.contains("install") -> "Disinstallazione di SafeGuard"
+            else -> "Info app di SafeGuard ($context)"
         }
     }
 
@@ -150,6 +211,20 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != pkg) return
 
+        // Cache: nei browser la schermata è identificata dal testo della barra degli indirizzi.
+        // Dopo [RESCAN_WINDOW_MS] (pagina caricata) la stessa schermata non viene più riletta.
+        BROWSER_URL_BARS[pkg]?.let { barId ->
+            val bar = root.findAccessibilityNodeInfosByViewId(barId)?.firstOrNull()
+            val key = pkg + '|' + bar?.text + '|' + (bar?.isFocused == true)
+            release(bar)
+            if (key != lastScanKey) {
+                lastScanKey = key
+                lastScanKeyAt = now
+            } else if (now - lastScanKeyAt > RESCAN_WINDOW_MS) {
+                return
+            }
+        }
+
         // Ricerche a rischio: si esce dal motore di ricerca prima ancora di guardare i risultati.
         findRiskySearch(pkg, root)?.let { hit ->
             blockSearch(hit, now)
@@ -163,15 +238,21 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         // a) Il browser è su un dominio già in blacklist: può succedere se la pagina è arrivata
         //    aggirando il DNS (DoH per indirizzo IP, cache, proxy). Si esce comunque.
         if (host != null && filter.check(host).blocked) {
-            blockContent("sito in blacklist", now)
+            blockContent("sito in blacklist", now, host)
             return
         }
+
+        // Nelle pagine dei motori di ricerca decide solo la ricerca scritta dall'utente (già
+        // controllata sopra): i risultati di una ricerca innocua come "scommessa vinta con gli
+        // amici" contengono per forza parole a rischio e non devono far chiudere la pagina.
+        // I siti aperti da lì restano coperti dal filtro DNS e dall'analisi dei contenuti.
+        if (pkg in SEARCH_APPS || (host != null && SearchQueryClassifier.isSearchEngine(host))) return
 
         // b) Analisi dei testi visibili (pagina web, banner pubblicitario, schermata di un'app).
         val text = StringBuilder()
         collectText(root, text, 0, CONTENT_TEXT_CHARS)
         val hit = ContentClassifier.classify(text) ?: return
-        blockContent(hit.category.label, now)
+        blockContent(hit.category.label, now, host.orEmpty())
 
         // c) Auto-apprendimento: solo per siti esterni. Mai per la banca in whitelist (lì si esce
         //    dalla pagina dei prestiti ma l'home banking resta raggiungibile) né per motori di
@@ -215,6 +296,22 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             }
         }
 
+        // App di ricerca (App Google, widget della Home): nella pagina dei risultati la ricerca è
+        // mostrata in una casella di sola lettura con un id noto, e nel titolo della pagina web.
+        SEARCH_BOX_IDS[pkg]?.forEach { id ->
+            val box = root.findAccessibilityNodeInfosByViewId(id)?.firstOrNull()
+            val text = box?.text?.toString()?.trim().orEmpty()
+            val focused = box?.isFocused == true
+            release(box)
+            if (text.isNotEmpty()) SearchQueryClassifier.classify(text, typing = focused)?.let { return it }
+        }
+        if (pkg in SEARCH_APPS) {
+            findWebViewTitle(root, 0)?.let { title ->
+                val query = SEARCH_TITLE_SUFFIXES.firstOrNull { title.endsWith(it) }?.let { title.removeSuffix(it) }
+                if (query != null) SearchQueryClassifier.classify(query)?.let { return it }
+            }
+        }
+
         if (!onSearchEngine) return null
         val fields = ArrayList<AccessibilityNodeInfo>(4)
         collectEditable(root, fields, 0, urlBarId)
@@ -223,6 +320,26 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             if (text.isEmpty() || isHint(field)) continue
             SearchQueryClassifier.classify(text, typing = field.isFocused)?.let { return it }
         }
+        return null
+    }
+
+    /** Sui vecchi Android i nodi vanno restituiti al pool; da Android 13 è un'operazione vuota. */
+    @Suppress("DEPRECATION")
+    private fun release(node: AccessibilityNodeInfo?) {
+        if (node != null && android.os.Build.VERSION.SDK_INT < 33) {
+            try {
+                node.recycle()
+            } catch (e: IllegalStateException) {
+                // già restituito
+            }
+        }
+    }
+
+    /** Titolo della prima WebView della schermata (es. "trading online - Google Search"). */
+    private fun findWebViewTitle(node: AccessibilityNodeInfo?, depth: Int): String? {
+        if (node == null || depth > 12) return null
+        if (node.className == "android.webkit.WebView") return node.text?.toString()
+        for (i in 0 until node.childCount) findWebViewTitle(node.getChild(i), depth + 1)?.let { return it }
         return null
     }
 
@@ -242,6 +359,11 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         lastContentBlockAt = now
         // Nel log solo la categoria: il testo cercato non viene mai registrato.
         android.util.Log.i("SafeGuardSearch", "ricerca bloccata: ${hit.category}")
+        lastScanKey = null
+        app.securityLog.grouped(
+            "search:${hit.query}", EventType.SEARCH, Severity.WARNING,
+            "Ricerca bloccata: \"${hit.query}\"", "Categoria: ${hit.category.label} · termine: ${hit.term}"
+        )
         performGlobalAction(GLOBAL_ACTION_BACK)
         handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 250)
         handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_HOME) }, 500)
@@ -261,9 +383,14 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
      * Esce dal contenuto: prima con Indietro; se entro pochi secondi si ricade su un altro
      * contenuto da bloccare (es. la pagina precedente è dello stesso sito) si va alla Home.
      */
-    private fun blockContent(reason: String, now: Long) {
+    private fun blockContent(reason: String, now: Long, where: String = "") {
         val repeated = now - lastContentBlockAt < REPEAT_BLOCK_WINDOW_MS
         lastContentBlockAt = now
+        lastScanKey = null
+        app.securityLog.grouped(
+            "content:$reason:$where", EventType.CONTENT, Severity.WARNING,
+            "Pagina bloccata per i contenuti", if (where.isEmpty()) reason else "$where · $reason"
+        )
         performGlobalAction(if (repeated) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
         Toast.makeText(this, "SafeGuard: contenuto bloccato ($reason)", Toast.LENGTH_SHORT).show()
     }
@@ -309,7 +436,10 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private var instance: SettingsGuardAccessibilityService? = null
 
         private const val RELOCK_THROTTLE_MS = 800L
-        private const val CONTENT_SCAN_INTERVAL_MS = 700L
+        private const val SCAN_DEBOUNCE_MS = 300L
+        private const val SCAN_MAX_WAIT_MS = 1_200L
+        private const val RESCAN_WINDOW_MS = 6_000L
+        private const val INTEGRITY_INTERVAL_MS = 15_000L
         private const val REPEAT_BLOCK_WINDOW_MS = 4_000L
         private const val FLAGS_CACHE_MS = 3_000L
         private const val MAX_DEPTH = 40
@@ -368,6 +498,29 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             "com.whatsapp", "com.whatsapp.w4b", "org.telegram.messenger", "org.thoughtcrime.securesms",
             "com.google.android.gm", "com.microsoft.office.outlook",
         )
+
+        /** Caselle (anche di sola lettura) in cui le app di ricerca mostrano la ricerca in corso. */
+        private val SEARCH_BOX_IDS = mapOf(
+            "com.google.android.googlequicksearchbox" to listOf(
+                "com.google.android.googlequicksearchbox:id/googleapp_srp_search_box_text",
+                "com.google.android.googlequicksearchbox:id/googleapp_search_box",
+                "com.google.android.googlequicksearchbox:id/search_box",
+            ),
+        )
+
+        /** Suffissi del titolo della pagina dei risultati di Google nelle varie lingue. */
+        private val SEARCH_TITLE_SUFFIXES = listOf(
+            " - Google Search", " - Cerca con Google", " - Ricerca Google", " - Google Suche",
+            " - Recherche Google", " - Buscar con Google",
+        )
+
+        /** Tutti e soli i pacchetti di cui il servizio riceve gli eventi. */
+        private val RELEVANT_PACKAGES: Set<String> =
+            HashSet<String>().apply {
+                addAll(SETTINGS_PACKAGES)
+                addAll(BROWSER_URL_BARS.keys)
+                addAll(SEARCH_APPS)
+            }
 
         private val SENSITIVE_CLASS_HINTS = listOf("DeviceAdmin", "VpnSettings", "UninstallerActivity")
 

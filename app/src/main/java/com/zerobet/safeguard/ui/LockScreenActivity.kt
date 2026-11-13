@@ -1,6 +1,17 @@
 package com.zerobet.safeguard.ui
 
+import android.content.Context
+import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
+import android.provider.Settings
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.Button
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.zerobet.safeguard.guard.IntegrityChecker
+import com.zerobet.safeguard.vpn.DomainBlockerVpnService
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
@@ -29,9 +40,22 @@ class LockScreenActivity : ComponentActivity() {
 
     private var pinAccepted = false
 
+    /** Non null quando la schermata è stata aperta dal controllo di integrità. */
+    private var problem by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val pinManager = (application as SafeGuardApp).pinManager
+        problem = intent.getStringExtra(EXTRA_PROBLEM)
+
+        val vpnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == RESULT_OK) {
+                pinManager.protectionEnabled = true
+                DomainBlockerVpnService.start(this)
+                pinAccepted = true
+                finish()
+            }
+        }
 
         onBackPressedDispatcher.addCallback(this) { leaveToHome() }
 
@@ -43,10 +67,36 @@ class LockScreenActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        val issue = problem
+                        if (issue != null) {
+                            Text(
+                                if (issue == IntegrityChecker.PROBLEM_VPN) "Il filtro di rete di SafeGuard è stato spento."
+                                else "Il Guardiano di SafeGuard è stato disattivato.",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Button(onClick = {
+                                // Riattivare la protezione non richiede il PIN: serve solo per lasciarla spenta.
+                                GuardState.grant(GuardState.GRACE_AFTER_PIN_MS)
+                                if (issue == IntegrityChecker.PROBLEM_VPN) {
+                                    val consent = VpnService.prepare(this@LockScreenActivity)
+                                    if (consent != null) vpnLauncher.launch(consent) else {
+                                        DomainBlockerVpnService.start(this@LockScreenActivity)
+                                        pinAccepted = true
+                                        finish()
+                                    }
+                                } else {
+                                    pinAccepted = true
+                                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                                    finish()
+                                }
+                            }) { Text("Riattiva ora la protezione") }
+                        }
                         PinVerify(
                             pinManager = pinManager,
-                            title = "Impostazione protetta",
-                            subtitle = "Questa sezione può disattivare SafeGuard.\nÈ richiesto il PIN del tutore.",
+                            title = if (issue != null) "Protezione disattivata" else "Impostazione protetta",
+                            subtitle = if (issue != null) "Riattiva il servizio qui sopra per continuare a usare il telefono,\noppure inserisci il PIN del tutore."
+                            else "Questa sezione può disattivare SafeGuard.\nÈ richiesto il PIN del tutore.",
                             onSuccess = {
                                 pinAccepted = true
                                 GuardState.grant(GuardState.GRACE_AFTER_PIN_MS)
@@ -58,6 +108,12 @@ class LockScreenActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        problem = intent.getStringExtra(EXTRA_PROBLEM)
     }
 
     override fun onStart() {
@@ -75,5 +131,15 @@ class LockScreenActivity : ComponentActivity() {
     private fun leaveToHome() {
         SettingsGuardAccessibilityService.goHome(this)
         if (!isFinishing) finish()
+    }
+
+    companion object {
+        private const val EXTRA_PROBLEM = "problem"
+
+        /** Intent per la modalità "servizio obbligatorio spento" (vedi IntegrityChecker). */
+        fun integrityIntent(context: Context, problem: String): Intent =
+            Intent(context, LockScreenActivity::class.java)
+                .putExtra(EXTRA_PROBLEM, problem)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 }

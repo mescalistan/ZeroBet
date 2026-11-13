@@ -1,5 +1,6 @@
 package com.zerobet.safeguard.data
 
+import com.zerobet.safeguard.vpn.HashedDomainSet
 import kotlinx.coroutines.flow.Flow
 
 class DomainRepository(private val dao: DomainDao) {
@@ -20,8 +21,14 @@ class DomainRepository(private val dao: DomainDao) {
         dao.insertWhitelisted(WhitelistedBank(name = "Consentito dal tutore", domain = domain.domain))
     }
 
-    /** Tutti i domini delle fonti esterne, come set per lookup O(1). */
-    suspend fun loadSyncedDomains(): Set<String> = dao.allSyncedDomains().toHashSet()
+    /** Tutti i domini delle fonti esterne in forma compatta (hash a 64 bit), letti in streaming dal DB. */
+    fun loadSyncedHashes(): HashedDomainSet {
+        val builder = HashedDomainSet.Builder(1 shl 18)
+        dao.syncedDomainCursor().use { cursor ->
+            while (cursor.moveToNext()) builder.add(cursor.getString(0))
+        }
+        return builder.build()
+    }
 
     /** Registra un dominio auto-appreso (ignorato se già presente). */
     suspend fun learn(rawDomain: String, origin: String, detail: String) {

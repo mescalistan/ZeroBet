@@ -6,18 +6,22 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.zerobet.safeguard.security.DeviceStorage
 
 @Database(
     entities = [
         BlockedDomain::class, WhitelistedBank::class,
-        SyncedDomain::class, AutoLearnedBlockedDomain::class, SyncStatus::class
+        SyncedDomain::class, AutoLearnedBlockedDomain::class, SyncStatus::class,
+        SecurityEventLog::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun domainDao(): DomainDao
+
+    abstract fun securityEventDao(): SecurityEventDao
 
     companion object {
         @Volatile
@@ -25,13 +29,15 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun get(context: Context): AppDatabase =
             instance ?: synchronized(this) {
+                // Il DB sta nello storage protetto dal dispositivo: filtro e registro funzionano
+                // anche dopo un riavvio, prima dello sblocco dello schermo (Direct Boot).
                 instance ?: Room.databaseBuilder(
-                    context.applicationContext,
+                    DeviceStorage.context(context),
                     AppDatabase::class.java,
-                    "safeguard.db"
+                    DeviceStorage.DB_NAME
                 )
                     .addCallback(SeedCallback)
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                     .also { instance = it }
             }
@@ -61,6 +67,15 @@ abstract class AppDatabase : RoomDatabase() {
          * predefinite (affiliazioni e resolver DoH). Whitelist e blacklist esistenti restano intatte.
          * Le CREATE devono coincidere esattamente con lo schema generato da Room per le entity.
          */
+        /** v3: Registro Allarmi. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `security_event_log` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `timestamp` INTEGER NOT NULL, `severity` TEXT NOT NULL, `type` TEXT NOT NULL, `title` TEXT NOT NULL, `detail` TEXT NOT NULL, `count` INTEGER NOT NULL, `lastAt` INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_security_event_log_timestamp` ON `security_event_log` (`timestamp`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_security_event_log_type` ON `security_event_log` (`type`)")
+            }
+        }
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `synced_domains` (`domain` TEXT NOT NULL, `source` TEXT NOT NULL, `batch` INTEGER NOT NULL, PRIMARY KEY(`domain`))")

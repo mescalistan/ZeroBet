@@ -4,7 +4,7 @@ import java.net.URLDecoder
 import java.text.Normalizer
 
 /** Ricerca a rischio: [term] è la parola o l'espressione che l'ha fatta scattare. */
-class SearchHit(val category: ContentCategory, val term: String)
+class SearchHit(val category: ContentCategory, val term: String, val query: String = "")
 
 /**
  * Riconosce le ricerche su scommesse, trading/investimenti e prestiti scritte in un motore di
@@ -30,7 +30,7 @@ object SearchQueryClassifier {
     private val WORDS: Map<ContentCategory, Set<String>> = mapOf(
         ContentCategory.GAMBLING to setOf(
             // generiche
-            "casino", "casinos", "poker", "blackjack", "roulette", "baccarat", "bingo", "betting",
+            "casino", "casinos", "poker", "scommesse", "scommettere", "scommettitore", "scommettitori", "blackjack", "roulette", "baccarat", "bingo", "betting",
             "gambling", "azzardo", "jackpot", "schedina", "schedine", "pronostico", "pronostici",
             "bookmaker", "bookmakers", "bookmakers", "allibratore", "allibratori", "tipster", "tipsters",
             "lotteria", "lotterie", "superenalotto", "enalotto", "eurojackpot", "totocalcio", "totogol",
@@ -83,9 +83,9 @@ object SearchQueryClassifier {
         ),
     )
 
-    /** Radici: valgono se la parola INIZIA così (es. "scommess" -> scommesse, scommessa). */
+    /** Radici: valgono se la parola INIZIA così (es. "prestit" -> prestito, prestiti). */
     private val STEMS: Map<ContentCategory, List<String>> = mapOf(
-        ContentCategory.GAMBLING to listOf("scommess", "scommett", "pokerst", "superenalott"),
+        ContentCategory.GAMBLING to listOf("pokerst", "superenalott"),
         ContentCategory.TRADING to listOf(
             "tradingonline", "criptovalut", "cryptovalut", "cryptocurrenc", "criptomonet", "bitcoin",
             "forextrad", "tradingview",
@@ -110,6 +110,9 @@ object SearchQueryClassifier {
     /** Espressioni di più parole: è qui che entrano i termini ambigui. */
     private val PHRASES: Map<ContentCategory, List<String>> = mapOf(
         ContentCategory.GAMBLING to listOf(
+            "scommessa sportiva", "scommessa online", "scommessa multipla", "scommessa singola", "scommessa live",
+            "scommessa calcio", "scommessa sistema", "scommessa vincente", "scommetti ora", "scommetti online",
+            "scommetti sul", "piazzare una scommessa", "piazza la scommessa", "fare una scommessa online",
             "slot machine", "slot machines", "slot online", "slot gratis", "slot vlt", "giochi slot",
             "slot demo", "slot da bar", "sala slot", "sale slot", 
             "sala scommesse", "sala bingo", "gratta e vinci", "10 e lotto", "dieci e lotto",
@@ -172,8 +175,8 @@ object SearchQueryClassifier {
         "prestito oneroso", "prestito gratuito", "prestito libri", "prestito libro", "prestito bibliotecario",
         "prestito interbibliotecario", "prestito bibliotecari", "prestito digitale", "prestito ebook",
         "prestiti calciomercato", "calciomercato prestiti", "prestito linguistico", "prestiti linguistici",
-        "prestito d uso", "prestito opere", "prestito attrezzatura", "prestito bici",
-        "on loan", "loan word", "loan words", "loanword",
+        "prestito d uso", "prestito d onore", "prestito opere", "prestito attrezzatura", "prestito bici",
+        "on loan", "book loan", "library loan", "interlibrary loan", "fare casino", "fatto un casino", "fa casino", "troppo casino", "loan word", "loan words", "loanword",
         // finanziamento pubblico
         "finanziamento pubblico", "finanziamenti pubblici", "finanziamento ai partiti",
         "finanziamento dei partiti", "finanziamenti europei", "finanziamento europeo",
@@ -258,7 +261,10 @@ object SearchQueryClassifier {
      *   ("invest" potrebbe diventare "investigatore") e viene ignorata finché non è seguita da uno spazio.
      * @return la categoria a rischio, o null se la ricerca è innocua.
      */
-    fun classify(rawQuery: String, typing: Boolean = false): SearchHit? {
+    fun classify(rawQuery: String, typing: Boolean = false): SearchHit? =
+        match(rawQuery, typing)?.let { SearchHit(it.category, it.term, rawQuery.trim().take(120)) }
+
+    private fun match(rawQuery: String, typing: Boolean): SearchHit? {
         if (rawQuery.length < 3 || rawQuery.length > 300) return null
         var text = normalize(rawQuery)
         if (typing && !rawQuery.last().isWhitespace()) text = text.substringBeforeLast(' ', "")

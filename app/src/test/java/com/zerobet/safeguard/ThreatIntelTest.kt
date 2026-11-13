@@ -114,7 +114,7 @@ class ThreatIntelTest {
             whitelist = setOf("unicredit.it", "amico-bet365.it"),
             blockedDomains = setOf("snai.it", "dns.google"),
             keywords = listOf("prestit"),
-            external = hashSetOf("ads.tracker-network.com", "sito-oscurato.net")
+            external = com.zerobet.safeguard.vpn.HashedDomainSet.of("ads.tracker-network.com", "sito-oscurato.net")
         )
         // Match esatto e sui sottodomini anche per le liste esterne
         assertEquals(BlockReason.LIST, filter.check("sito-oscurato.net").reason)

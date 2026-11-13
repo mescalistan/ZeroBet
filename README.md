@@ -57,7 +57,12 @@ app/src/main/
     │   ├── ContentClassifier.kt                   Riconoscimento di scommesse/trading/prestiti nei testi
     │   ├── SearchQueryClassifier.kt               Ricerche a rischio nei motori di ricerca
     │   └── GuardState.kt                          Finestra di grazia dopo il PIN
-    ├── receiver/BootReceiver.kt   Riavvio al boot
+    ├── security/DeviceStorage.kt  Storage "device protected" per Direct Boot
+    ├── security/SecurityLog.kt    Registro Allarmi (scrittura in background, raggruppamento)
+    ├── guard/IntegrityChecker.kt  Controllo dei servizi obbligatori
+    ├── vpn/HashedDomainSet.kt     Liste esterne compatte (hash a 64 bit + ricerca binaria)
+    ├── receiver/SimStateReceiver.kt  Rimozione/inserimento SIM
+    ├── receiver/BootReceiver.kt   Riavvio al boot (LOCKED_BOOT_COMPLETED)
     └── ui/
         ├── MainActivity.kt        Onboarding → PIN → Dashboard
         ├── OnboardingScreen.kt    Wizard: PIN, banca, permessi
@@ -76,8 +81,8 @@ app/src/main/
    - altrimenti → inoltrata.
 3. Le banche note sono in blacklist di default: solo quella scelta nel wizard resta raggiungibile.
 
-Ogni lookup è su `HashSet` in memoria: match esatto O(1), poi match sui domini padre (una ricerca
-per label), anche con centinaia di migliaia di domini in lista.
+Le regole del tutore sono in `HashSet`; le liste esterne in un array ordinato di hash a 64 bit cercato
+con ricerca binaria: match esatto, poi match sui domini padre (una ricerca per label), senza allocazioni.
 
 ## Threat intelligence e auto-alimentazione
 
@@ -97,9 +102,52 @@ sia le regole dell'app e del tutore sia i domini delle liste esterne (caricati a
 ricerca per nome e "Consenti" per i falsi positivi). I domini auto-appresi sono visibili nella scheda
 **Appresi** della dashboard, dove il tutore può rimuoverli o consentirli in modo permanente.
 
-**Privacy.** I testi letti a schermo sono analizzati in memoria sul dispositivo e scartati subito:
+**Privacy.** I testi letti a schermo sono analizzati in memoria sul dispositivo e scartati subito (tranne la ricerca bloccata, salvata nel Registro Allarmi):
 non vengono salvati né trasmessi. L'unico dato registrato è il dominio bloccato con il motivo.
 Sono escluse dall'analisi le app di sistema, telefono, SMS, WhatsApp, Telegram, Signal, Gmail e Outlook.
+
+## Avvio al boot e controllo di integrità
+
+- **Direct Boot.** Servizio VPN, Guardiano, `BootReceiver`, `SimStateReceiver` e Device Admin sono
+  `directBootAware`. Hash del PIN, stato della protezione, database e copia compatta delle liste stanno
+  nello storage *device protected* (`DeviceStorage`), quindi il filtro riparte su
+  `LOCKED_BOOT_COMPLETED`, prima che venga inserito il codice di sblocco. I dati delle versioni
+  precedenti vengono spostati al primo avvio.
+- **Controllo di integrità** (`IntegrityChecker`): allo sblocco dello schermo (`USER_PRESENT`), all'avvio,
+  dal Guardiano e ogni 15 minuti. VPN spenta con consenso valido → riavviata subito. VPN senza consenso o
+  Guardiano disattivato senza PIN → evento critico, notifica ad alta priorità e schermata di blocco che
+  chiede di riattivare il servizio.
+- **Risparmio energetico**: wizard e dashboard chiedono l'esenzione dall'ottimizzazione della batteria.
+
+## Registro Allarmi
+
+Scheda della dashboard (quindi dietro PIN) alimentata dalla tabella Room `security_event_log`, con
+gravità INFO / WARNING / CRITICAL e filtri *Tutti*, *Manomissione / SIM*, *Ricerche bloccate*, *Domini bloccati*.
+Un badge mostra gli eventi critici avvenuti dall'ultimo accesso del tutore. Registra:
+
+- SIM rimossa, inserita o con operatore cambiato (CRITICAL, anche offline e a schermo bloccato);
+- tentativi di aprire le Impostazioni protette (VPN, Accessibilità, Device Admin, DNS privato, disinstallazione);
+- PIN errati con il numero del tentativo; spegnimenti e riavvii; servizi obbligatori trovati spenti;
+- ricerche bloccate (con il testo cercato) e pagine chiuse per i contenuti;
+- domini bloccati dal filtro DNS, raggruppati: più richieste allo stesso dominio in un minuto sono una riga con contatore.
+
+Il registro tiene le ultime 5.000 righe; si svuota solo dalla dashboard, dopo una conferma, e la pulizia
+lascia a sua volta una riga.
+
+## Consumi
+
+| Misura | Valore |
+|---|---|
+| Liste esterne in memoria (211.000 domini, array ordinato di hash a 64 bit) | 1,6 MB (circa 22 MB con `HashSet<String>`) |
+| Query DNS, media su 10.000 (unit test, JVM desktop) | circa 2 µs |
+| Ricerca, media su 1.000 (unit test, JVM desktop) | circa 60 µs |
+| Heap Java del processo sull'emulatore, a riposo | circa 12 MB (prima circa 28 MB) |
+| CPU a riposo sull'emulatore | 0% |
+
+Il Guardiano riceve dal sistema solo gli eventi di Impostazioni, installer, browser supportati e app di
+ricerca; legge la schermata dopo 300 ms di quiete e non la rilegge se la barra degli indirizzi non è
+cambiata. Il thread della VPN dorme in una lettura bloccante quando non c'è traffico DNS.
+`./gradlew testDebugUnitTest` rigenera i numeri in `app/build/reports/safeguard-benchmark.txt`.
 
 ## Configurazione consigliata sul telefono
 
@@ -127,6 +175,15 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
   attivi il riconoscimento dei contenuti e il filtro DNS);
 - dalle pagine CONSOB i domini sono estratti con regex: i link di servizio noti sono esclusi, ma un sito legittimo
   citato in un comunicato potrebbe finire in lista;
+- il riconoscimento dei contenuti a schermo vale per browser e app di ricerca: nelle altre app il servizio di
+  accessibilità non viene più attivato (scelta per i consumi), restano filtro DNS e blocco delle ricerche;
+- nelle pagine dei risultati dei motori di ricerca decide solo la ricerca scritta, non il testo dei risultati;
+- Android limita l'apertura di schermate dallo sfondo: se il Guardiano è spento, la schermata di blocco del
+  controllo di integrità può non aprirsi da sola e resta la notifica; se un task killer chiude tutto il
+  processo, il controllo riparte entro 15 minuti;
+- la rimozione della SIM è riconosciuta dagli eventi di sistema: un telefono acceso senza SIM dopo essere
+  stato spento viene segnalato solo al primo evento SIM successivo all'avvio;
+- un "arresto forzato" dell'app dalle Impostazioni (protette dal Guardiano) disattiva il servizio di accessibilità;
 - il blocco agisce sui **siti/domini**; le app già installate che contattano domini non in lista non vengono fermate;
 - il Device Admin impedisce la disinstallazione standard, ma non la **modalità provvisoria**, `adb` o il ripristino di fabbrica;
 - il Guardiano riconosce le schermate delle Impostazioni dai testi (italiano/inglese) e dai package AOSP/Samsung/Xiaomi:

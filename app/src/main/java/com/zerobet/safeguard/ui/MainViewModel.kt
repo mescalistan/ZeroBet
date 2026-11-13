@@ -10,7 +10,10 @@ import com.zerobet.safeguard.admin.SafeGuardDeviceAdminReceiver
 import com.zerobet.safeguard.data.AutoLearnedBlockedDomain
 import com.zerobet.safeguard.data.BankPreset
 import com.zerobet.safeguard.data.BlockedDomain
+import com.zerobet.safeguard.data.EventType
+import com.zerobet.safeguard.data.SecurityEventLog
 import com.zerobet.safeguard.data.SyncStatus
+import com.zerobet.safeguard.security.DeviceStorage
 import com.zerobet.safeguard.data.SyncedDomain
 import com.zerobet.safeguard.data.WhitelistedBank
 import com.zerobet.safeguard.guard.SettingsGuardAccessibilityService
@@ -41,6 +44,52 @@ data class PermissionState(val vpn: Boolean, val deviceAdmin: Boolean, val acces
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val repository = (app as SafeGuardApp).repository
+    private val securityLog = (app as SafeGuardApp).securityLog
+    private val eventDao = (app as SafeGuardApp).database.securityEventDao()
+    private val statePrefs = DeviceStorage.statePrefs(app)
+
+    // ---- Registro Allarmi ----
+
+    /** 0 = tutti, 1 = manomissione/SIM, 2 = ricerche bloccate, 3 = domini bloccati. */
+    val logFilter = MutableStateFlow(0)
+
+    val logEvents: StateFlow<List<SecurityEventLog>> =
+        logFilter.flatMapLatest { filter ->
+            when (filter) {
+                1 -> eventDao.observeByTypes(EventType.TAMPER_GROUP, LOG_PAGE)
+                2 -> eventDao.observeByTypes(EventType.SEARCH_GROUP, LOG_PAGE)
+                3 -> eventDao.observeByTypes(EventType.DOMAIN_GROUP, LOG_PAGE)
+                else -> eventDao.observeAll(LOG_PAGE)
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val logCount: StateFlow<Int> =
+        eventDao.observeCount().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** Momento dell'ultimo accesso del tutore al registro. */
+    private val logSeenAt = MutableStateFlow(statePrefs.getLong(KEY_LOG_SEEN, 0L))
+
+    /** Eventi critici avvenuti dall'ultimo accesso del tutore: è il numero mostrato nel badge. */
+    val criticalUnseen: StateFlow<Int> =
+        logSeenAt.flatMapLatest { eventDao.observeCriticalSince(it) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    /** Soglia per evidenziare come "nuovi" gli eventi nella visita in corso. */
+    val logHighlightSince = MutableStateFlow(Long.MAX_VALUE)
+
+    /** Il tutore ha aperto il registro: il badge si azzera, gli eventi nuovi restano evidenziati. */
+    fun markLogSeen() {
+        logHighlightSince.value = logSeenAt.value
+        val now = System.currentTimeMillis()
+        statePrefs.edit().putLong(KEY_LOG_SEEN, now).apply()
+        logSeenAt.value = now
+    }
+
+    /** Pulizia del registro: possibile solo dalla dashboard (quindi dopo il PIN) e dopo conferma. */
+    fun clearLog() {
+        securityLog.clear()
+        securityLog.warning(EventType.TAMPER, "Registro Allarmi svuotato dal tutore")
+    }
     val pinManager: PinManager = (app as SafeGuardApp).pinManager
 
     val whitelist: StateFlow<List<WhitelistedBank>> =
@@ -119,5 +168,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         const val SYNCED_PAGE = 200
+        const val LOG_PAGE = 300
+        const val KEY_LOG_SEEN = "log_seen_at"
     }
 }
