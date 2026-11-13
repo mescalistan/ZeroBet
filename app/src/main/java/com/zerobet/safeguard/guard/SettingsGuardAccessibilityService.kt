@@ -81,6 +81,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private val appNames = HashMap<String, String>()
     private val packageVerdicts = HashMap<String, java.util.Optional<ContentCategory>>()
     private var packageVerdictsFilter: Any? = null
+    private var allowedBankApps = BlockedPackages.BankApps.NONE
     private val handler = Handler(Looper.getMainLooper())
 
     // Le preferenze sono cifrate: leggerle a ogni evento sarebbe costoso, quindi si tengono
@@ -193,6 +194,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private fun sensitiveScreen(event: AccessibilityEvent): String? {
         val className = event.className?.toString().orEmpty()
         // Nomi di Activity/Fragment AOSP: DeviceAdminSettings, DeviceAdminAdd, VpnSettings...
+        bypassScreen(event)?.let { return it }
         SENSITIVE_CLASS_HINTS.firstOrNull { className.contains(it, ignoreCase = true) }?.let {
             return when (it) {
                 "DeviceAdmin" -> "Amministratore dispositivo"
@@ -230,6 +232,53 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             else -> "Info app di SafeGuard ($context)"
         }
     }
+
+    /**
+     * Vettori di aggiramento: installazione manuale di un APK, utenti/ospite/spazi paralleli,
+     * opzioni sviluppatore, ripristino delle impostazioni di rete. Per le pagine delle Impostazioni
+     * conta solo il TITOLO (i primi testi in alto): la voce "Utenti multipli" nell'elenco di
+     * "Sistema" non deve bloccare la pagina Sistema, la pagina "Utenti multipli" sì.
+     */
+    private fun bypassScreen(event: AccessibilityEvent): String? {
+        val pkg = event.packageName?.toString().orEmpty()
+        val root = rootInActiveWindow
+        if (pkg.contains("packageinstaller")) {
+            val text = StringBuilder()
+            event.text.forEach { text.append(it).append('\n') }
+            collectText(root, text, 0, SETTINGS_TEXT_CHARS)
+            val screen = text.toString().lowercase()
+            if (INSTALL_PROMPTS.any { screen.contains(it) }) {
+                // Nome dell'app che si vuole installare (primo testo breve della finestra) per il registro.
+                val name = text.lines().map { it.trim() }.firstOrNull { it.length in 2..50 }.orEmpty()
+                val risky = SearchQueryClassifier.classify(name)?.let { " · a rischio: ${it.category.label}" }.orEmpty()
+                return "Installazione di un'app da fonte sconosciuta ($name)$risky"
+            }
+            return null
+        }
+        val header = ArrayList<String>(HEADER_TEXTS + 2)
+        event.text.forEach { t -> t?.toString()?.let { header.add(it) } }
+        collectHeader(root, header, 0)
+        for (raw in header) {
+            val title = normalizeTitle(raw)
+            if (title.isEmpty() || title.length > 80) continue
+            BYPASS_TITLES.firstOrNull { (t, _) -> title == t || title.startsWith("$t ") || title.startsWith("$t (") }
+                ?.let { return it.second }
+        }
+        return null
+    }
+
+    /** Primi testi della schermata in ordine di lettura (titolo della pagina o del dialogo). */
+    private fun collectHeader(node: AccessibilityNodeInfo?, out: MutableList<String>, depth: Int) {
+        if (node == null || depth > MAX_DEPTH || out.size >= HEADER_TEXTS) return
+        node.text?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
+        for (i in 0 until node.childCount) {
+            if (out.size >= HEADER_TEXTS) return
+            collectHeader(node.getChild(i), out, depth + 1)
+        }
+    }
+
+    private fun normalizeTitle(raw: String): String =
+        raw.lowercase().replace('\u2011', '-').replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
 
     private fun showLockScreen() {
         startActivity(
@@ -427,7 +476,21 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             return
         }
 
-        // b) Play Store: scheda di un'app di trading, scommesse o prestiti.
+        // b) App della banca autorizzata: libera, tranne le sezioni prestiti/investimenti/trading.
+        if (allowedBankApps.isAllowed(pkg)) {
+            BankAppRules.findRiskySection(screen.segments)?.let { blockInApp(pkg, it, now, bankSection = true) }
+            return
+        }
+
+        // c) Telegram: nelle chat private e nell'elenco delle chat contano solo link e inviti a
+        //    rischio; nei canali, gruppi e bot vale il filtro standard.
+        if (pkg in TelegramRules.PACKAGES && TelegramRules.chatKind(screen.segments) != ChatKind.PUBLIC) {
+            val filter = app.filterStore.current
+            TelegramRules.findRiskyLink(screen.segments) { filter.check(it).blocked }?.let { blockInApp(pkg, it, now) }
+            return
+        }
+
+        // d) Play Store: scheda di un'app di trading, scommesse o prestiti.
         if (pkg in STORE_PACKAGES) {
             InAppContentAndAdFilter.classifyStorePage(screen.segments)?.let {
                 blockInApp(pkg, it, now)
@@ -435,7 +498,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             }
         }
 
-        // c) Pubblicità a rischio, poi contenuti dedicati (titoli di video, post, articoli).
+        // e) Pubblicità a rischio, poi contenuti dedicati (titoli di video, post, articoli).
         val hit = InAppContentAndAdFilter.findAd(screen.segments)
             ?: InAppContentAndAdFilter.findContent(screen.segments)
             ?: return
@@ -462,16 +525,17 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
      * post nei feed, Indietro negli altri casi); se entro pochi secondi il contenuto è ancora lì
      * si passa a Indietro e infine alla Home.
      */
-    private fun blockInApp(pkg: String, hit: InAppHit, now: Long) {
+    private fun blockInApp(pkg: String, hit: InAppHit, now: Long, bankSection: Boolean = false) {
         val level = if (now - lastInAppBlockAt < IN_APP_ESCALATION_MS) inAppLevel + 1 else 0
         inAppLevel = level
         lastInAppBlockAt = now
         lastScreenHash = 0
         val name = appName(pkg)
-        val title = when (hit.kind) {
-            InAppKind.AD -> "Pubblicità bloccata su $name"
-            InAppKind.STORE_PAGE -> "Scheda di un'app bloccata su $name"
-            InAppKind.CONTENT -> "Contenuto bloccato su $name"
+        val title = when {
+            bankSection -> "Sezione bloccata nell'app della banca ($name)"
+            hit.kind == InAppKind.AD -> "Pubblicità bloccata su $name"
+            hit.kind == InAppKind.STORE_PAGE -> "Scheda di un'app bloccata su $name"
+            else -> "Contenuto bloccato su $name"
         }
         app.securityLog.grouped(
             "inapp:$pkg:${hit.kind}:${hit.term}", EventType.CONTENT, Severity.WARNING,
@@ -505,15 +569,21 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     /** Categoria per cui l'app è bloccata, o null. Il risultato è in cache finché la whitelist non cambia. */
     private fun blockedAppCategory(pkg: String): ContentCategory? {
         val filter = app.filterStore.current
-        if (filter !== packageVerdictsFilter) {
-            packageVerdictsFilter = filter
-            packageVerdicts.clear()
-        }
+        refreshBankApps()
         packageVerdicts[pkg]?.let { return it.orElse(null) }
         val allowed = filter.whitelistedDomains.mapTo(HashSet()) { BlockedPackages.labelOfDomain(it) }
-        val category = BlockedPackages.categoryOf(pkg, appName(pkg).takeIf { it != pkg }, allowed)
+        val category = BlockedPackages.categoryOf(pkg, appName(pkg).takeIf { it != pkg }, allowed, allowedBankApps)
         packageVerdicts[pkg] = java.util.Optional.ofNullable(category)
         return category
+    }
+
+    /** Ricalcola app bancarie consentite e verdetti sui package quando cambia la whitelist. */
+    private fun refreshBankApps() {
+        val filter = app.filterStore.current
+        if (filter === packageVerdictsFilter) return
+        packageVerdictsFilter = filter
+        packageVerdicts.clear()
+        allowedBankApps = BlockedPackages.bankAppsFor(filter.whitelistedDomains)
     }
 
     private fun blockApp(pkg: String, category: ContentCategory, now: Long) {
@@ -524,8 +594,13 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             "app:$pkg", EventType.APP, Severity.CRITICAL,
             "App bloccata all'apertura: $name", "Categoria: ${category.label} · $pkg"
         )
-        performGlobalAction(GLOBAL_ACTION_HOME)
-        startActivity(LockScreenActivity.blockedAppIntent(this, name))
+        // L'avviso si apre SOPRA l'app vietata (un gesto Home prima lo coprirebbe); uscendo
+        // dall'avviso senza PIN si torna alla Home (vedi LockScreenActivity).
+        try {
+            startActivity(LockScreenActivity.blockedAppIntent(this, name))
+        } catch (e: Exception) {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        }
     }
 
     /** Nome dell'app mostrato all'utente ("YouTube"), con cache; il nome del package se non è leggibile. */
@@ -674,6 +749,70 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private const val MAX_SEGMENTS = 400
         private const val MAX_SEGMENT_CHARS = 1_200
         private const val MAX_QUERY_CHARS = 120
+        private const val HEADER_TEXTS = 4
+
+        /** Testi del dialogo di installazione manuale di un APK (package installer). */
+        private val INSTALL_PROMPTS = listOf(
+            "vuoi installare", "installare questa app", "installare questa applicazione", "do you want to install",
+            "install this app", "install this application", "vuoi aggiornare", "aggiornare questa app",
+            "do you want to update", "update this app", "installa app sconosciute", "install unknown apps",
+            // avviso preliminare sulle app di origine sconosciuta (installer recenti)
+            "unknown apps", "app sconosciute", "app di origine sconosciuta", "installing this app",
+            "installando questa app", "installazione di questa app", "from this source", "da questa origine",
+        )
+
+        /** Titoli delle pagine delle Impostazioni usate per aggirare la protezione -> nome per il registro. */
+        private val BYPASS_TITLES: List<Pair<String, String>> = listOf(
+            // installazione da fonti sconosciute
+            "installa app sconosciute" to "Installazione di app da fonti sconosciute",
+            "install unknown apps" to "Installazione di app da fonti sconosciute",
+            "origini sconosciute" to "Installazione di app da fonti sconosciute",
+            "unknown sources" to "Installazione di app da fonti sconosciute",
+            // utenti, ospite, spazi paralleli
+            "utenti multipli" to "Utenti multipli / ospite",
+            "multiple users" to "Utenti multipli / ospite",
+            "utenti" to "Utenti multipli / ospite",
+            "users" to "Utenti multipli / ospite",
+            "modalità ospite" to "Utenti multipli / ospite",
+            "guest mode" to "Utenti multipli / ospite",
+            "aggiungi ospite" to "Utenti multipli / ospite",
+            "add guest" to "Utenti multipli / ospite",
+            "aggiungi utente" to "Utenti multipli / ospite",
+            "add user" to "Utenti multipli / ospite",
+            "secondo spazio" to "Secondo spazio / spazio privato",
+            "second space" to "Secondo spazio / spazio privato",
+            "spazio privato" to "Secondo spazio / spazio privato",
+            "private space" to "Secondo spazio / spazio privato",
+            "cartella protetta" to "Secondo spazio / spazio privato",
+            "secure folder" to "Secondo spazio / spazio privato",
+            "app gemelle" to "App doppie / clonate",
+            "app doppie" to "App doppie / clonate",
+            "dual apps" to "App doppie / clonate",
+            "dual messenger" to "App doppie / clonate",
+            "clona app" to "App doppie / clonate",
+            "app clone" to "App doppie / clonate",
+            // opzioni sviluppatore
+            "opzioni sviluppatore" to "Opzioni sviluppatore",
+            "opzioni per gli sviluppatori" to "Opzioni sviluppatore",
+            "developer options" to "Opzioni sviluppatore",
+            "debug wireless" to "Opzioni sviluppatore",
+            "wireless debugging" to "Opzioni sviluppatore",
+            // ripristino
+            "opzioni di ripristino" to "Ripristino delle impostazioni",
+            "reset options" to "Ripristino delle impostazioni",
+            "ripristina wi-fi, rete mobile e bluetooth" to "Ripristino delle impostazioni di rete",
+            "reimposta wi-fi, dati mobili e bluetooth" to "Ripristino delle impostazioni di rete",
+            "reset wi-fi, mobile & bluetooth" to "Ripristino delle impostazioni di rete",
+            "reset mobile network settings" to "Ripristino delle impostazioni di rete",
+            "reset bluetooth & wi-fi" to "Ripristino delle impostazioni di rete",
+            "ripristina impostazioni di rete" to "Ripristino delle impostazioni di rete",
+            "ripristino impostazioni di rete" to "Ripristino delle impostazioni di rete",
+            "reset network settings" to "Ripristino delle impostazioni di rete",
+            "ripristino dati di fabbrica" to "Ripristino dati di fabbrica",
+            "cancella tutti i dati (ripristino dati di fabbrica)" to "Ripristino dati di fabbrica",
+            "erase all data (factory reset)" to "Ripristino dati di fabbrica",
+            "factory data reset" to "Ripristino dati di fabbrica",
+        )
         private const val SCAN_MAX_WAIT_MS = 1_200L
         private const val RESCAN_WINDOW_MS = 6_000L
         private const val INTEGRITY_INTERVAL_MS = 15_000L
@@ -754,7 +893,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             "com.facebook.lite", "com.zhiliaoapp.musically", "com.ss.android.ugc.trill", "com.twitter.android",
             "com.reddit.frontpage", "com.snapchat.android", "com.pinterest", "com.linkedin.android",
             "com.google.android.apps.magazines", "flipboard.app", "tv.twitch.android.app", "com.vkontakte.android",
-            "org.telegram.messenger", "com.threads.android", "com.instagram.barcelona",
+            "com.threads.android", "com.instagram.barcelona",
         )
 
         private const val HANDLED_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or

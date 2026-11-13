@@ -72,7 +72,7 @@ class SimStateReceiver : BroadcastReceiver() {
                         // di leggere la SIM: si conferma dopo qualche secondo prima di dare l'allarme.
                         Handler(Looper.getMainLooper()).postDelayed({ confirmAbsent(app, slot) }, CONFIRM_DELAY_MS)
                     } else {
-                        apply(app, slot, presence)
+                        applyPresence(app, slot, presence)
                     }
                 }
                 ACTION_CARRIER_CONFIG_CHANGED -> checkOperator(app)
@@ -95,10 +95,11 @@ class SimStateReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
                 TelephonyManager.SIM_STATE_ABSENT
             }
-            if (SimStateTracker.presence(state) != SimStateTracker.PRESENT) apply(app, slot, SimStateTracker.ABSENT)
+            if (SimStateTracker.presence(state) != SimStateTracker.PRESENT) applyPresence(app, slot, SimStateTracker.ABSENT)
         }
 
-        private fun apply(app: SafeGuardApp, slot: Int, presence: String) {
+        /** Registra il nuovo stato dello slot (e l'allarme se è cambiato). Usata anche dall'hook di test. */
+        internal fun applyPresence(app: SafeGuardApp, slot: Int, presence: String) {
             val prefs = DeviceStorage.statePrefs(app)
             val key = "sim_presence_$slot"
             val previous = prefs.getString(key, null)

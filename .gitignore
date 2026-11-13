@@ -12,3 +12,6 @@ captures/
 *.aab
 *.jks
 *.keystore
+
+# PIN di prova dell'emulatore (solo locale, vedi README)
+emulator-test-pin.txt

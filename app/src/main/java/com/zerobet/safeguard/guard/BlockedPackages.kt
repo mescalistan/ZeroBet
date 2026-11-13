@@ -43,6 +43,7 @@ object BlockedPackages {
         ).forEach { put(it, ContentCategory.GAMBLING) }
         listOf(
             // finanziarie e prestiti
+            "it.findomestic.mobile", "it.agos.agos4you", "com.cofidis.mobile", "it.iblbanca.mobile",
             "it.findomestic.app", "com.findomestic.mobile", "it.compass.app", "it.compass.easy", "com.compass.compasseasy",
             "it.agos.app", "it.agos.agosapp", "it.cofidis.app", "com.younited.credit", "it.younited.app",
             "it.fiditalia.app", "it.santanderconsumer.app", "com.klarna.android", "it.scalapay.app", "com.scalapay.android",
@@ -87,9 +88,17 @@ object BlockedPackages {
      *   il cui package o nome le contiene è quella della banca autorizzata e non viene mai bloccata.
      * @return la categoria per cui l'app è bloccata, o null se è consentita.
      */
-    fun categoryOf(packageName: String, label: String? = null, allowedLabels: Set<String> = emptySet()): ContentCategory? {
+    fun categoryOf(
+        packageName: String,
+        label: String? = null,
+        allowedLabels: Set<String> = emptySet(),
+        banks: BankApps = BankApps.NONE,
+    ): ContentCategory? {
         val pkg = packageName.lowercase()
         if (NEVER_BLOCKED_PREFIXES.any { pkg.startsWith(it) }) return null
+        // App bancarie del catalogo: libera quella della banca in whitelist, bloccate tutte le altre.
+        if (banks.isAllowed(pkg)) return null
+        if (banks.isKnownBank(pkg)) return ContentCategory.BANK
         val name = label?.lowercase().orEmpty()
         if (allowedLabels.any { it.length >= 4 && (pkg.contains(it) || name.replace(" ", "").contains(it)) }) return null
 
@@ -110,6 +119,28 @@ object BlockedPackages {
         // Nome visibile dell'app: stesse regole delle ricerche (parola intera, espressioni innocue escluse).
         if (name.length >= 3) SearchQueryClassifier.classify(name)?.let { return it.category }
         return null
+    }
+
+    /** App bancarie: quelle della banca autorizzata dal tutore e tutte quelle del catalogo. */
+    class BankApps(private val allowed: Set<String>, private val all: Set<String>) {
+        fun isAllowed(pkg: String) = pkg in allowed || allowed.any { pkg.startsWith("$it.") }
+        fun isKnownBank(pkg: String) = pkg in all || all.any { pkg.startsWith("$it.") }
+
+        companion object {
+            val NONE = BankApps(emptySet(), emptySet())
+        }
+    }
+
+    /** Ricava le app bancarie consentite dai domini in whitelist (catalogo in DefaultData). */
+    fun bankAppsFor(whitelistedDomains: Collection<String>): BankApps {
+        val whitelisted = whitelistedDomains.map { it.lowercase().removePrefix("www.") }.toHashSet()
+        val allowed = HashSet<String>()
+        val all = HashSet<String>()
+        for (preset in com.zerobet.safeguard.data.DefaultData.bankPresets) {
+            all.addAll(preset.packages)
+            if (preset.domains.any { it in whitelisted }) allowed.addAll(preset.packages)
+        }
+        return BankApps(allowed, all)
     }
 
     /** "www.unicredit.it" -> "unicredit"; "bancobpm.it" -> "bancobpm". */

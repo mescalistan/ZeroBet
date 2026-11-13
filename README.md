@@ -62,6 +62,7 @@ app/src/main/
     ├── guard/IntegrityChecker.kt  Controllo dei servizi obbligatori
     ├── guard/InAppContentAndAdFilter.kt  Pubblicità e contenuti a rischio nelle app
     ├── guard/BlockedPackages.kt   App dedicate chiuse all'apertura
+    ├── guard/AppContextRules.kt   Telegram (chat private / canali) e app della banca autorizzata
     ├── vpn/HashedDomainSet.kt     Liste esterne compatte (hash a 64 bit + ricerca binaria)
     ├── receiver/SimStateReceiver.kt  Rimozione/inserimento SIM
     ├── receiver/BootReceiver.kt   Riavvio al boot (LOCKED_BOOT_COMPLETED)
@@ -99,6 +100,9 @@ con ricerca binaria: match esatto, poi match sui domini padre (una ricerca per l
 | **App: ricerche** | Il blocco delle ricerche vale in qualsiasi app (YouTube, Instagram, Facebook, TikTok, Telegram, X, Reddit, Play Store, Google News…): le caselle di ricerca sono riconosciute dall'id della vista o dal suggerimento ("Cerca"). Azione: Indietro e, se dopo 400 ms la ricerca è ancora a schermo, Home. Nel registro: *"Ricerca bloccata su YouTube: trading online"*. |
 | **App: pubblicità e contenuti** (`InAppContentAndAdFilter`) | Sui testi visibili, un elemento alla volta. **Pubblicità**: etichetta di annuncio ("Sponsorizzato", "Annuncio", "Ad"…) o invito all'azione ("Installa", "Scopri di più") vicino a un termine a rischio. **Contenuti**: un titolo/post/articolo con un'espressione inequivocabile ("come investire", "trading online", "pronostici serie A", "prestito veloce") o almeno due termini a rischio; "manovra finanziaria", "inflazione ISTAT", "stipendi pubblici" non scattano. Azione a scala: scorrimento in avanti nei feed, poi Indietro, poi Home. |
 | **App dedicate** (`BlockedPackages`) | Le app di trading, borsa, crypto, scommesse, poker, casinò e finanziarie vengono chiuse all'apertura con una schermata di avviso: elenco di package noti, euristica sul nome del package e sul nome visibile. Resta libera l'app della banca in whitelist. Nel Play Store la scheda di un'app di questo tipo viene chiusa prima che si possa premere "Installa". |
+| **Banca autorizzata: sito + app** | Il catalogo delle banche (`DefaultData.bankPresets`) associa a ogni istituto domini web e package delle app ufficiali. L'app della banca in whitelist resta utilizzabile (saldo, movimenti, bonifici), ma il Guardiano chiude le sezioni il cui titolo in alto è *Richiedi prestito*, *Prestito istantaneo*, *Cessione del quinto*, *Finanziamento*, *Investimenti*, *Trading*, *Compra azioni*, *Crypto*. Le app delle altre banche del catalogo e delle finanziarie (Findomestic, Compass, Agos, Cofidis, IBL…) sono bloccate all'apertura. |
+| **Telegram** | Ricerca globale sempre controllata. Canali, gruppi e bot (sottotitolo "iscritti", "membri", "bot", pulsanti "Unisciti", "Silenzia"): filtro standard. Chat private ("online", "ultimo accesso", "sta scrivendo") ed elenco delle chat: le parole discorsive non contano, si blocca solo per link o domini a rischio (filtro DNS) e inviti a bot o canali con nome a rischio (`@CasinoBonusBot`, `t.me/segnalitrading`). |
+| **Bypass di sistema** | PIN del tutore anche per: installazione manuale di APK (dialogo del package installer e pagina "Installa app sconosciute"), utenti multipli / ospite / secondo spazio / spazio privato / app clonate, opzioni sviluppatore e debug wireless, opzioni di ripristino (rete, preferenze app, dati di fabbrica). Per le pagine delle Impostazioni conta solo il titolo: la pagina "Sistema", che elenca queste voci, resta libera. |
 | **DNS privato** | Il Guardiano chiede il PIN sul dialogo "DNS privato" delle Impostazioni; la dashboard avvisa se è impostato un provider. |
 
 Le voci delle liste esterne già coperte da parole chiave o euristica non vengono salvate (su circa
@@ -153,8 +157,27 @@ Il Guardiano segue tutte le app tranne quelle scartate in O(1) (interfaccia di s
 tastiere, telefono, fotocamera, messaggi privati). Cambio di finestra e testo digitato si valutano
 subito; scorrimento e aggiornamenti del contenuto dopo 350 ms di quiete. La schermata è letta in un
 solo passaggio e, se il suo hash è uguale a quello precedente, non viene analizzata; i testi già
-valutati restano in una cache. Sull'emulatore: 0,0–0,2% di CPU scorrendo il feed di YouTube. Il thread della VPN dorme in una lettura bloccante quando non c'è traffico DNS.
+valutati restano in una cache. Misurato sull'emulatore con i tick di CPU del processo: circa 2% di un core durante lo scorrimento continuo
+del feed di YouTube (la stessa cifra della versione precedente: è la lettura dell'albero dei nodi tramite il
+sistema), 0% a riposo. Il valore "0,0–0,2%" riportato in precedenza era sottostimato dal campionamento di `top`. Il thread della VPN dorme in una lettura bloccante quando non c'è traffico DNS.
 `./gradlew testDebugUnitTest` rigenera i numeri in `app/build/reports/safeguard-benchmark.txt`.
+
+## Prove strumentate sull'emulatore (solo build di debug)
+
+La build di debug contiene `DebugTestReceiver` (cartella `app/src/debug`, assente nella build di rilascio),
+protetto dal permesso `DUMP`: lo può usare solo la shell adb.
+
+```bash
+adb shell am broadcast -a com.zerobet.safeguard.debug.SET_PIN --es pin 123456 -n com.zerobet.safeguard/.debug.DebugTestReceiver
+```
+
+```bash
+adb shell am broadcast -a com.zerobet.safeguard.debug.SIM --es state ABSENT --ei slot 0 -n com.zerobet.safeguard/.debug.DebugTestReceiver
+```
+
+Il primo imposta un PIN (sostituisce quello esistente), il secondo simula la SIM rimossa (`PRESENT` la reinserisce)
+passando per la stessa logica del receiver, perché la SIM dell'emulatore non si può togliere. Sull'emulatore di
+sviluppo è impostato un PIN di prova, salvato in `emulator-test-pin.txt` (escluso da git).
 
 ## Configurazione consigliata sul telefono
 
@@ -188,6 +211,15 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
   non viene riconosciuto; un'app che non espone i testi all'accessibilità non è controllabile;
 - un titolo che usa i termini a rischio in un altro senso può essere chiuso (falso positivo): la scala di azioni
   parte dallo scorrimento proprio per limitarne l'effetto;
+- nelle app bancarie si guarda solo il titolo della schermata (i primi tre testi in alto): un'app che mette il
+  titolo della sezione altrove non viene riconosciuta; la sezione "Mutuo" resta consultabile;
+- su Telegram il tipo di chat è dedotto dai testi dell'intestazione: verificato solo con un'app fittizia che li
+  riproduce, non con il client reale;
+- le Opzioni sviluppatore sono protette, ma la verifica dal vivo non è stata possibile (sull'emulatore di prova
+  sono disattivate); la protezione si basa sul titolo della pagina, come per Utenti e Ripristino, verificati;
+- su Android recenti un "arresto forzato" di SafeGuard disattiva il servizio di accessibilità e fa ripartire l'app
+  con i broadcast di avvio: viene registrato come manomissione critica ("SafeGuard è stato arrestato
+  forzatamente") e il controllo di integrità chiede di riattivare il Guardiano;
 - l'elenco delle app dedicate non può essere completo: quelle non in elenco sono riconosciute solo se il nome del
   package o dell'app contiene una parola a rischio;
 - nelle pagine dei risultati dei motori di ricerca decide solo la ricerca scritta, non il testo dei risultati;

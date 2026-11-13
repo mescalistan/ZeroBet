@@ -3,7 +3,9 @@ package com.zerobet.safeguard.guard
 enum class ContentCategory(val label: String) {
     GAMBLING("scommesse e casinò"),
     TRADING("trading e investimenti"),
-    LOANS("prestiti e finanziamenti")
+    LOANS("prestiti e finanziamenti"),
+    /** App di una banca non autorizzata dal tutore (solo per il blocco delle app). */
+    BANK("banca non autorizzata")
 }
 
 class ContentHit(val category: ContentCategory, val score: Int, val phrases: List<String>)

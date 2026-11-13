@@ -1,7 +1,12 @@
 package com.zerobet.safeguard.data
 
 /** Banca proposta nel wizard. Tutti i suoi domini finiscono in whitelist se selezionata. */
-data class BankPreset(val name: String, val domains: List<String>)
+/**
+ * Banca proponibile nel wizard: domini del sito e package delle app Android ufficiali.
+ * Se il tutore la mette in whitelist, sito e app restano utilizzabili (con il Guardiano attivo
+ * dentro l'app sulle sezioni prestiti e investimenti); altrimenti sito e app sono bloccati.
+ */
+data class BankPreset(val name: String, val domains: List<String>, val packages: List<String> = emptyList())
 
 /**
  * Dati con cui viene pre-popolato il database al primo avvio.
@@ -13,30 +18,33 @@ data class BankPreset(val name: String, val domains: List<String>)
 object DefaultData {
 
     val bankPresets: List<BankPreset> = listOf(
-        BankPreset("Intesa Sanpaolo", listOf("intesasanpaolo.com", "intesa.it")),
-        BankPreset("UniCredit", listOf("unicredit.it", "unicreditgroup.eu")),
-        BankPreset("Banco BPM", listOf("bancobpm.it")),
-        BankPreset("BPER Banca", listOf("bper.it")),
-        BankPreset("Monte dei Paschi di Siena", listOf("mps.it")),
-        BankPreset("Poste Italiane / BancoPosta", listOf("poste.it", "postepay.it")),
-        BankPreset("BNL", listOf("bnl.it")),
-        BankPreset("Crédit Agricole Italia", listOf("credit-agricole.it")),
-        BankPreset("Credem", listOf("credem.it")),
-        BankPreset("ING Italia", listOf("ing.it")),
-        BankPreset("Fineco", listOf("finecobank.com", "fineco.it")),
-        BankPreset("Banca Mediolanum", listOf("bancamediolanum.it")),
-        BankPreset("Banca Sella", listOf("sella.it")),
-        BankPreset("Banca Widiba", listOf("widiba.it")),
-        BankPreset("Banca Popolare di Sondrio", listOf("popso.it")),
-        BankPreset("Mediobanca Premier (CheBanca!)", listOf("mediobancapremier.com", "chebanca.it")),
-        BankPreset("Deutsche Bank Italia", listOf("deutsche-bank.it", "db.com")),
-        BankPreset("Banca Ifis", listOf("bancaifis.it")),
-        BankPreset("illimity", listOf("illimity.com", "illimitybank.com")),
-        BankPreset("Hype", listOf("hype.it")),
-        BankPreset("N26", listOf("n26.com")),
-        BankPreset("Revolut", listOf("revolut.com")),
-        BankPreset("BBVA Italia", listOf("bbva.it")),
-        BankPreset("Isybank", listOf("isybank.com")),
+        BankPreset("Intesa Sanpaolo", listOf("intesasanpaolo.com", "intesa.it"), listOf("com.latuabanca.android", "com.intesasanpaolo.investo")),
+        BankPreset("UniCredit", listOf("unicredit.it", "unicreditgroup.eu"), listOf("it.unicredit", "com.unicredit")),
+        BankPreset("Banco BPM", listOf("bancobpm.it"), listOf("com.lynxspa.bancopopolare")),
+        BankPreset("BPER Banca", listOf("bper.it"), listOf("it.gruppobper.ams.android.bper")),
+        BankPreset("Monte dei Paschi di Siena", listOf("mps.it"), listOf("it.mps.app.digitalbanking")),
+        BankPreset(
+            "Poste Italiane / BancoPosta", listOf("poste.it", "postepay.it"),
+            listOf("posteitaliane.posteapp.appbpol", "posteitaliane.posteapp.apppostepay")
+        ),
+        BankPreset("BNL", listOf("bnl.it"), listOf("it.bnl.apps.banking")),
+        BankPreset("Crédit Agricole Italia", listOf("credit-agricole.it"), listOf("it.cariparma.mobile")),
+        BankPreset("Credem", listOf("credem.it"), listOf("it.credem.mobile")),
+        BankPreset("ING Italia", listOf("ing.it"), listOf("it.ingdirect.app")),
+        BankPreset("Fineco", listOf("finecobank.com", "fineco.it"), listOf("com.fineco.it", "it.fineco.app")),
+        BankPreset("Banca Mediolanum", listOf("bancamediolanum.it"), listOf("it.mediolanum.mobile")),
+        BankPreset("Banca Sella", listOf("sella.it"), listOf("it.sella.app")),
+        BankPreset("Banca Widiba", listOf("widiba.it"), listOf("it.widiba.app")),
+        BankPreset("Banca Popolare di Sondrio", listOf("popso.it"), listOf("it.popso.scrigno")),
+        BankPreset("Mediobanca Premier (CheBanca!)", listOf("mediobancapremier.com", "chebanca.it"), listOf("it.chebanca.android")),
+        BankPreset("Deutsche Bank Italia", listOf("deutsche-bank.it", "db.com"), listOf("it.deutschebank.mobile")),
+        BankPreset("Banca Ifis", listOf("bancaifis.it"), listOf("it.bancaifis.rendimax")),
+        BankPreset("illimity", listOf("illimity.com", "illimitybank.com"), listOf("com.illimity.bank")),
+        BankPreset("Hype", listOf("hype.it"), listOf("it.hype.app")),
+        BankPreset("N26", listOf("n26.com"), listOf("de.number26.android")),
+        BankPreset("Revolut", listOf("revolut.com"), listOf("com.revolut.revolut")),
+        BankPreset("BBVA Italia", listOf("bbva.it"), listOf("com.bbva.bbvacontigo", "it.bbva.mobile")),
+        BankPreset("Isybank", listOf("isybank.com"), listOf("com.isybank.app")),
     )
 
     private val gamblingDomains = listOf(

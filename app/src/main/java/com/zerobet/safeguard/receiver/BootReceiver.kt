@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.os.SystemClock
 import android.util.Log
 import com.zerobet.safeguard.SafeGuardApp
 import com.zerobet.safeguard.data.EventType
@@ -32,7 +33,18 @@ class BootReceiver : BroadcastReceiver() {
                 return
             }
             if (action == Intent.ACTION_LOCKED_BOOT_COMPLETED) {
-                app.securityLog.warning(EventType.POWER, "Telefono riavviato", "Avvio completato a schermo bloccato")
+                // Le versioni recenti di Android riconsegnano i broadcast di avvio anche a un'app
+                // che riparte dopo un ARRESTO FORZATO. Se il sistema è acceso da più di qualche
+                // minuto non è un riavvio del telefono: è l'app che è stata fermata (manomissione).
+                val upMinutes = SystemClock.elapsedRealtime() / 60_000
+                if (upMinutes < REAL_BOOT_MAX_MINUTES) {
+                    app.securityLog.warning(EventType.POWER, "Telefono riavviato", "Avvio completato a schermo bloccato")
+                } else {
+                    app.securityLog.critical(
+                        EventType.TAMPER, "SafeGuard è stato arrestato forzatamente",
+                        "L'app è ripartita da sola; telefono acceso da $upMinutes minuti"
+                    )
+                }
             }
             if (action != Intent.ACTION_LOCKED_BOOT_COMPLETED) app.onUserUnlocked()
 
@@ -52,6 +64,7 @@ class BootReceiver : BroadcastReceiver() {
 
     private companion object {
         const val TAG = "SafeGuardBoot"
+        const val REAL_BOOT_MAX_MINUTES = 10L
         val HANDLED = setOf(
             Intent.ACTION_LOCKED_BOOT_COMPLETED,
             Intent.ACTION_BOOT_COMPLETED,

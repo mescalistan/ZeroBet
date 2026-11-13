@@ -259,6 +259,7 @@ fun DashboardScreen(vm: MainViewModel, onLock: () -> Unit) {
         item {
             SyncCard(
                 status = syncStatus,
+                total = syncedCount,
                 running = syncRunning,
                 progress = syncProgress,
                 onSyncNow = { SyncScheduler.syncNow(context) }
@@ -571,8 +572,9 @@ private fun isPrivateDnsForced(context: android.content.Context): Boolean = try 
 }
 
 @Composable
-private fun SyncCard(status: List<SyncStatus>, running: Boolean, progress: String, onSyncNow: () -> Unit) {
-    val total = status.sumOf { it.domainCount }
+private fun SyncCard(status: List<SyncStatus>, total: Int, running: Boolean, progress: String, onSyncNow: () -> Unit) {
+    // [total] sono i domini unici in tabella: i conteggi per fonte si sovrappongono (uno stesso
+    // dominio può comparire in più liste), quindi la loro somma sarebbe più alta.
     val lastSuccess = status.maxOfOrNull { it.lastSuccessAt } ?: 0L
     val formatter = remember { DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT) }
 
@@ -583,7 +585,7 @@ private fun SyncCard(status: List<SyncStatus>, running: Boolean, progress: Strin
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Liste esterne", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                if (lastSuccess > 0) "$total domini · ultimo aggiornamento ${formatter.format(Date(lastSuccess))}"
+                if (lastSuccess > 0) "$total domini unici · ultimo aggiornamento ${formatter.format(Date(lastSuccess))}"
                 else "Mai aggiornate: avvia il primo aggiornamento.",
                 style = MaterialTheme.typography.bodyMedium
             )
