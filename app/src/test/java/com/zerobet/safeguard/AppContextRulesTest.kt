@@ -123,3 +123,30 @@ class AppContextRulesTest {
         assertNull(TelegramRules.findRiskyLink(listOf("versione 1.2.3 rilasciata", "ore 18.30"), ::isBlocked))
     }
 }
+
+class DeveloperOptionsRulesTest {
+
+    private fun tap(vararg t: String) = com.zerobet.safeguard.guard.DeveloperOptionsRules.isBuildNumberTap(t.toList())
+
+    @Test
+    fun `il tocco su Numero build viene riconosciuto`() {
+        assertTrue(tap("Build number", "BE4B.251210.005"))
+        assertTrue(tap("Numero build", "UP1A.231005.007"))
+        assertTrue(tap("Numero di build"))
+        assertTrue(tap("Build number\nBE4B.251210.005"))
+        assertTrue(tap("Versione MIUI", "MIUI Global 14.0.3"))
+        assertTrue(tap("Versione HyperOS"))
+        assertTrue(tap("Build\u00a0number"))
+    }
+
+    @Test
+    fun `le altre voci di Info telefono restano libere`() {
+        listOf(
+            "Versione Android", "Android version", "Modello", "Model", "IMEI", "Stato SIM", "SIM status",
+            "Indirizzo IP", "Nome dispositivo", "Informazioni legali", "Aggiornamento di sistema",
+            "Versione banda di base", "Baseband version", "Livello patch di sicurezza Android",
+        ).forEach { assertTrue("Falso positivo: $it", !tap(it)) }
+        assertTrue(!tap(""))
+        assertTrue(!tap("Il numero build si trova in fondo alla pagina Info telefono"))
+    }
+}

@@ -132,3 +132,34 @@ object BankAppRules {
         return null
     }
 }
+
+/**
+ * Attivazione delle Opzioni sviluppatore: si ottiene toccando 7 volte "Numero build" (in
+ * Info telefono o, su Samsung, in Informazioni software; su Xiaomi è "Versione MIUI/HyperOS").
+ * Il Guardiano chiede il PIN al PRIMO tocco: la schermata di blocco interrompe la pagina e
+ * le Impostazioni azzerano il conteggio dei tocchi quando la pagina riprende.
+ * Kotlin puro, coperto da unit test.
+ */
+object DeveloperOptionsRules {
+
+    private val BUILD_LABELS = listOf(
+        "numero build", "numero di build", "numero della build", "build number", "build-nummer",
+        "versione miui", "miui version", "versione hyperos", "hyperos version",
+        "versione os", "os version",
+    )
+
+    /**
+     * true se il tocco è sulla voce "Numero build". [texts] sono i testi dell'evento di clic
+     * (titolo e riepilogo della voce): conta il titolo, cioè la prima riga non vuota, così un
+     * testo che menziona la build in mezzo a una frase non attiva il blocco.
+     */
+    fun isBuildNumberTap(texts: List<CharSequence?>): Boolean {
+        val title = texts.asSequence()
+            .mapNotNull { it?.toString() }
+            .flatMap { it.lineSequence() }
+            .map { it.lowercase().replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim() }
+            .firstOrNull { it.isNotEmpty() } ?: return false
+        if (title.length > 40) return false
+        return BUILD_LABELS.any { title == it || title.startsWith("$it ") || title.startsWith("$it:") }
+    }
+}

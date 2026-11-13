@@ -102,7 +102,7 @@ con ricerca binaria: match esatto, poi match sui domini padre (una ricerca per l
 | **App dedicate** (`BlockedPackages`) | Le app di trading, borsa, crypto, scommesse, poker, casinò e finanziarie vengono chiuse all'apertura con una schermata di avviso: elenco di package noti, euristica sul nome del package e sul nome visibile. Resta libera l'app della banca in whitelist. Nel Play Store la scheda di un'app di questo tipo viene chiusa prima che si possa premere "Installa". |
 | **Banca autorizzata: sito + app** | Il catalogo delle banche (`DefaultData.bankPresets`) associa a ogni istituto domini web e package delle app ufficiali. L'app della banca in whitelist resta utilizzabile (saldo, movimenti, bonifici), ma il Guardiano chiude le sezioni il cui titolo in alto è *Richiedi prestito*, *Prestito istantaneo*, *Cessione del quinto*, *Finanziamento*, *Investimenti*, *Trading*, *Compra azioni*, *Crypto*. Le app delle altre banche del catalogo e delle finanziarie (Findomestic, Compass, Agos, Cofidis, IBL…) sono bloccate all'apertura. |
 | **Telegram** | Ricerca globale sempre controllata. Canali, gruppi e bot (sottotitolo "iscritti", "membri", "bot", pulsanti "Unisciti", "Silenzia"): filtro standard. Chat private ("online", "ultimo accesso", "sta scrivendo") ed elenco delle chat: le parole discorsive non contano, si blocca solo per link o domini a rischio (filtro DNS) e inviti a bot o canali con nome a rischio (`@CasinoBonusBot`, `t.me/segnalitrading`). |
-| **Bypass di sistema** | PIN del tutore anche per: installazione manuale di APK (dialogo del package installer e pagina "Installa app sconosciute"), utenti multipli / ospite / secondo spazio / spazio privato / app clonate, opzioni sviluppatore e debug wireless, opzioni di ripristino (rete, preferenze app, dati di fabbrica). Per le pagine delle Impostazioni conta solo il titolo: la pagina "Sistema", che elenca queste voci, resta libera. |
+| **Bypass di sistema** | PIN del tutore anche per: installazione manuale di APK (dialogo del package installer e pagina "Installa app sconosciute"), utenti multipli / ospite / secondo spazio / spazio privato / app clonate, opzioni sviluppatore e debug wireless (compresa la loro attivazione con i tocchi su "Numero build"), opzioni di ripristino (rete, preferenze app, dati di fabbrica). Per le pagine delle Impostazioni conta solo il titolo: la pagina "Sistema", che elenca queste voci, resta libera. |
 | **DNS privato** | Il Guardiano chiede il PIN sul dialogo "DNS privato" delle Impostazioni; la dashboard avvisa se è impostato un provider. |
 
 Le voci delle liste esterne già coperte da parole chiave o euristica non vengono salvate (su circa
@@ -216,8 +216,9 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
 - su Telegram il tipo di chat è dedotto dai testi dell'intestazione: verificato solo con un'app fittizia che li
   riproduce, non con il client reale;
 - le Opzioni sviluppatore chiedono il PIN (verificato sull'emulatore: da Sistema, con l'intent diretto e aprendo
-  "Debug wireless" dalla ricerca delle Impostazioni), ma attivarle con i 7 tocchi su "Numero build" resta
-  possibile: la pagina "Info telefono" non è bloccata, perché contiene solo informazioni;
+  "Debug wireless" dalla ricerca delle Impostazioni). Anche la loro attivazione è protetta: finché sono spente,
+  il primo tocco su "Numero build" (o "Versione MIUI/HyperOS") chiede il PIN e interrompe il conteggio dei 7
+  tocchi; la pagina "Info telefono" resta consultabile. Disattivarle spegne anche il debug USB (adb);
 - su Android recenti un "arresto forzato" di SafeGuard disattiva il servizio di accessibilità e fa ripartire l'app
   con i broadcast di avvio: viene registrato come manomissione critica ("SafeGuard è stato arrestato
   forzatamente") e il controllo di integrità chiede di riattivare il Guardiano;

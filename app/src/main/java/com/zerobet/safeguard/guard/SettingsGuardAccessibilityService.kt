@@ -125,6 +125,19 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         if (!onboardingDone || GuardState.inGrace || GuardState.lockScreenVisible) return
 
         if (pkg in SETTINGS_PACKAGES) {
+            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED) {
+                // Ogni tocco su "Numero build" chiede il PIN (niente throttle: dopo "Annulla" il
+                // conteggio dei 7 tocchi non deve poter proseguire).
+                if (developerOptionsOff() && DeveloperOptionsRules.isBuildNumberTap(clickTexts(event))) {
+                    lastLockAt = now
+                    app.securityLog.grouped(
+                        "tamper:build-number", EventType.TAMPER, Severity.CRITICAL,
+                        "Tentativo di attivare le Opzioni sviluppatore", "Tocco su \"Numero build\""
+                    )
+                    showLockScreen()
+                }
+                return
+            }
             if (now - lastLockAt < RELOCK_THROTTLE_MS) return
             val screen = sensitiveScreen(event) ?: return
             lastLockAt = now
@@ -135,6 +148,8 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             )
             showLockScreen()
         } else if (protectionEnabled) {
+            // I tocchi servono solo per "Numero build": nelle altre app non avviano letture dello schermo.
+            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED) return
             // App dedicate a trading, scommesse e prestiti: chiuse appena si aprono.
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 blockedAppCategory(pkg)?.let { category ->
@@ -279,6 +294,18 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
 
     private fun normalizeTitle(raw: String): String =
         raw.lowercase().replace('\u2011', '-').replace('\u00a0', ' ').replace(Regex("\\s+"), " ").trim()
+
+    /** Opzioni sviluppatore non ancora attivate: solo allora i tocchi su "Numero build" contano. */
+    private fun developerOptionsOff(): Boolean =
+        Settings.Global.getInt(contentResolver, Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 0) == 0
+
+    /** Testi della voce toccata: quelli dell'evento o, se vuoti, i primi testi del nodo sorgente. */
+    private fun clickTexts(event: AccessibilityEvent): List<CharSequence?> {
+        if (event.text.any { !it.isNullOrBlank() }) return event.text
+        val out = ArrayList<String>(HEADER_TEXTS)
+        collectHeader(event.source, out, 0)
+        return out
+    }
 
     private fun showLockScreen() {
         startActivity(
@@ -899,7 +926,8 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private const val HANDLED_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
             AccessibilityEvent.TYPE_VIEW_SCROLLED or
-            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_CLICKED
 
         /** Caselle (anche di sola lettura) in cui le app di ricerca mostrano la ricerca in corso. */
         private val SEARCH_BOX_IDS = mapOf(
