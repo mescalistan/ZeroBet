@@ -215,8 +215,9 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
   titolo della sezione altrove non viene riconosciuta; la sezione "Mutuo" resta consultabile;
 - su Telegram il tipo di chat è dedotto dai testi dell'intestazione: verificato solo con un'app fittizia che li
   riproduce, non con il client reale;
-- le Opzioni sviluppatore sono protette, ma la verifica dal vivo non è stata possibile (sull'emulatore di prova
-  sono disattivate); la protezione si basa sul titolo della pagina, come per Utenti e Ripristino, verificati;
+- le Opzioni sviluppatore chiedono il PIN (verificato sull'emulatore: da Sistema, con l'intent diretto e aprendo
+  "Debug wireless" dalla ricerca delle Impostazioni), ma attivarle con i 7 tocchi su "Numero build" resta
+  possibile: la pagina "Info telefono" non è bloccata, perché contiene solo informazioni;
 - su Android recenti un "arresto forzato" di SafeGuard disattiva il servizio di accessibilità e fa ripartire l'app
   con i broadcast di avvio: viene registrato come manomissione critica ("SafeGuard è stato arrestato
   forzatamente") e il controllo di integrità chiede di riattivare il Guardiano;
