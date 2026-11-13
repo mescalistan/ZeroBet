@@ -24,10 +24,11 @@ object EventType {
     const val INTEGRITY = "INTEGRITY"   // servizio obbligatorio trovato spento
     const val SEARCH = "SEARCH"         // ricerca a rischio bloccata
     const val DOMAIN = "DOMAIN"         // dominio bloccato dal filtro DNS
-    const val CONTENT = "CONTENT"       // pagina bloccata per i contenuti a schermo
+    const val CONTENT = "CONTENT"       // pagina, video, post o pubblicità bloccati per i contenuti
+    const val APP = "APP"               // app dedicata (trading, scommesse, prestiti) chiusa all'apertura
 
     /** Filtro "Tentativi di manomissione / SIM". */
-    val TAMPER_GROUP = listOf(TAMPER, SIM, PIN, POWER, INTEGRITY)
+    val TAMPER_GROUP = listOf(TAMPER, SIM, PIN, POWER, INTEGRITY, APP)
     val SEARCH_GROUP = listOf(SEARCH, CONTENT)
     val DOMAIN_GROUP = listOf(DOMAIN)
 }

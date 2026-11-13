@@ -69,6 +69,9 @@ class DomainFilter(
 
     fun shouldBlock(rawDomain: String): Boolean = check(rawDomain).blocked
 
+    /** Domini autorizzati dal tutore (sola lettura). */
+    val whitelistedDomains: Set<String> get() = whitelist
+
     fun isWhitelisted(rawDomain: String): Boolean = matches(whitelist, normalize(rawDomain))
 
     /**

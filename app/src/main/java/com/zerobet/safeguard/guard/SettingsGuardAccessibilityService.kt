@@ -4,6 +4,8 @@ import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -39,6 +41,12 @@ import com.zerobet.safeguard.vpn.SafeDomains
  *    torna indietro. Se la pagina è un sito esterno aperto nel browser, il suo dominio viene
  *    aggiunto ai "domini auto-appresi" e da quel momento è bloccato anche a livello DNS.
  *
+ * 4) TUTTE LE ALTRE APP (social, video, news, store)
+ *    Blocco delle ricerche nelle caselle di ricerca delle app, delle pubblicità e dei contenuti
+ *    su scommesse/trading/prestiti (vedi InAppContentAndAdFilter), delle schede del Play Store e
+ *    delle app dedicate (vedi BlockedPackages). La schermata viene letta in un solo passaggio e
+ *    non viene analizzata se il suo hash è uguale a quello del controllo precedente.
+ *
  * 3) BLOCCO DELLE RICERCHE
  *    Se in un motore di ricerca (barra degli indirizzi del browser, casella di ricerca della
  *    pagina, app Google) viene scritta una ricerca su scommesse, trading/investimenti o prestiti
@@ -63,6 +71,16 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private var lastScanKey: String? = null
     private var lastScanKeyAt = 0L
     private var lastContentBlockAt = 0L
+
+    // Stato del filtro in-app
+    private var lastScreenHash = 0
+    private var lastSearchBlockAt = 0L
+    private var lastInAppBlockAt = 0L
+    private var lastAppBlockAt = 0L
+    private var inAppLevel = 0
+    private val appNames = HashMap<String, String>()
+    private val packageVerdicts = HashMap<String, java.util.Optional<ContentCategory>>()
+    private var packageVerdictsFilter: Any? = null
     private val handler = Handler(Looper.getMainLooper())
 
     // Le preferenze sono cifrate: leggerle a ogni evento sarebbe costoso, quindi si tengono
@@ -77,21 +95,23 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         app = application as SafeGuardApp
         appLabel = getString(R.string.app_name).lowercase()
         ignoredPackages = buildIgnoredPackages()
-        // Filtro a livello di sistema: Android consegna al servizio SOLO gli eventi di Impostazioni,
-        // installer, browser e app di ricerca. Per tutte le altre app il servizio non viene
-        // nemmeno svegliato: zero CPU e zero batteria mentre si usano giochi, social, video...
-        serviceInfo = serviceInfo.apply { packageNames = RELEVANT_PACKAGES.toTypedArray() }
+        // Nessun filtro di sistema: il servizio segue tutte le app (social, video, news, store).
+        // I pacchetti innocui (interfaccia di sistema, launcher, tastiere, telefono, fotocamera)
+        // vengono scartati in O(1) all'inizio di onAccessibilityEvent.
+        serviceInfo = serviceInfo.apply { packageNames = null }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-        ) return
+        val type = event.eventType
+        if (type and HANDLED_EVENTS == 0) return
         val pkg = event.packageName?.toString() ?: return
-        // Scarto in O(1) di tutto ciò che non è Impostazioni, browser o app di ricerca (difesa in
-        // profondità: il filtro di sistema impostato in onServiceConnected fa già lo stesso).
-        if (pkg !in RELEVANT_PACKAGES || pkg in ignoredPackages) return
+        // Scarto in O(1): una ricerca in HashSet, nessuna lettura dello schermo.
+        if (pkg in ignoredPackages) return
+        // Cambio di finestra e testo digitato si valutano subito; scorrimento e aggiornamenti del
+        // contenuto (decine al secondo) solo quando la schermata si è fermata.
+        val immediate = type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
 
         val now = SystemClock.elapsedRealtime()
         refreshFlags(now)
@@ -114,7 +134,14 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             )
             showLockScreen()
         } else if (protectionEnabled) {
-            scheduleScan(pkg, now)
+            // App dedicate a trading, scommesse e prestiti: chiuse appena si aprono.
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                blockedAppCategory(pkg)?.let { category ->
+                    blockApp(pkg, category, now)
+                    return
+                }
+            }
+            scheduleScan(pkg, now, immediate)
         }
     }
 
@@ -123,12 +150,17 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
      * [SCAN_DEBOUNCE_MS] (una pagina che si carica genera decine di eventi al secondo), ma mai
      * più tardi di [SCAN_MAX_WAIT_MS] dal primo evento in attesa.
      */
-    private fun scheduleScan(pkg: String, now: Long) {
+    private fun scheduleScan(pkg: String, now: Long, immediate: Boolean = false) {
         pendingPackage = pkg
         if (pendingSince == 0L) pendingSince = now
         handler.removeCallbacks(scanRunnable)
         val waited = now - pendingSince
-        handler.postDelayed(scanRunnable, if (waited >= SCAN_MAX_WAIT_MS) 0L else SCAN_DEBOUNCE_MS)
+        val delay = when {
+            waited >= SCAN_MAX_WAIT_MS -> 0L
+            immediate -> SCAN_IMMEDIATE_MS      // pochi ms: raggruppa gli eventi dello stesso istante
+            else -> SCAN_DEBOUNCE_MS
+        }
+        handler.postDelayed(scanRunnable, delay)
     }
 
     private val scanRunnable = Runnable {
@@ -136,7 +168,10 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         pendingSince = 0L
         if (pkg != null && !GuardState.inGrace && !GuardState.lockScreenVisible) {
             try {
-                inspectContent(pkg, SystemClock.elapsedRealtime())
+                val now = SystemClock.elapsedRealtime()
+                // Browser e app di ricerca hanno un percorso dedicato (barra degli indirizzi,
+                // auto-apprendimento del dominio); tutte le altre app passano dal filtro in-app.
+                if (pkg in BROWSER_URL_BARS || pkg in SEARCH_APPS) inspectContent(pkg, now) else inspectApp(pkg, now)
             } catch (e: Exception) {
                 android.util.Log.w("SafeGuardGuard", "Analisi della schermata fallita: ${e.message}")
             }
@@ -227,7 +262,7 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
 
         // Ricerche a rischio: si esce dal motore di ricerca prima ancora di guardare i risultati.
         findRiskySearch(pkg, root)?.let { hit ->
-            blockSearch(hit, now)
+            blockSearch(hit, now, pkg)
             return
         }
 
@@ -323,6 +358,185 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         return null
     }
 
+    // ---------------------------------------------------------------------------------------
+    // 4) App: ricerche, pubblicità, contenuti, schede del Play Store, app dedicate
+    // ---------------------------------------------------------------------------------------
+
+    private class Screen(val segments: ArrayList<String>, val searches: ArrayList<Pair<String, Boolean>>, val hash: Int)
+
+    /**
+     * Un solo passaggio sull'albero dei nodi visibili: raccoglie i testi (text e contentDescription)
+     * come segmenti, individua le caselle di ricerca e calcola l'hash della schermata. I testi che
+     * l'utente sta scrivendo in una casella che non è di ricerca (un messaggio, un commento) non
+     * vengono raccolti.
+     */
+    private fun readScreen(root: AccessibilityNodeInfo): Screen {
+        val segments = ArrayList<String>(64)
+        val searches = ArrayList<Pair<String, Boolean>>(2)
+        var hash = 17
+        var visited = 0
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.addLast(root)
+        while (stack.isNotEmpty() && visited < MAX_NODES) {
+            val node = stack.removeLast()
+            visited++
+            if (!node.isVisibleToUser) {
+                release(node)
+                continue
+            }
+            val editable = node.isEditable
+            val text = node.text?.toString()?.trim()
+            if (!text.isNullOrEmpty() && !(editable && isHint(node))) {
+                hash = hash * 31 + text.hashCode()
+                val hint = if (android.os.Build.VERSION.SDK_INT >= 26) node.hintText?.toString() else null
+                if (text.length <= MAX_QUERY_CHARS &&
+                    InAppContentAndAdFilter.isSearchField(node.viewIdResourceName, hint, editable)
+                ) {
+                    searches.add(text to node.isFocused)
+                } else if (!editable && segments.size < MAX_SEGMENTS) {
+                    segments.add(if (text.length > MAX_SEGMENT_CHARS) text.substring(0, MAX_SEGMENT_CHARS) else text)
+                }
+            }
+            if (!editable) {
+                val description = node.contentDescription?.toString()?.trim()
+                if (!description.isNullOrEmpty() && description != text && segments.size < MAX_SEGMENTS) {
+                    hash = hash * 31 + description.hashCode()
+                    segments.add(if (description.length > MAX_SEGMENT_CHARS) description.substring(0, MAX_SEGMENT_CHARS) else description)
+                }
+            }
+            for (i in node.childCount - 1 downTo 0) node.getChild(i)?.let { stack.addLast(it) }
+            if (node !== root) release(node)
+        }
+        return Screen(segments, searches, hash)
+    }
+
+    private fun inspectApp(pkg: String, now: Long) {
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != pkg) return
+        val screen = readScreen(root)
+
+        // Stessa schermata del controllo precedente: nessuna analisi.
+        val hash = screen.hash * 31 + pkg.hashCode()
+        if (hash == lastScreenHash) return
+        lastScreenHash = hash
+
+        // a) Ricerca scritta in una casella di ricerca dell'app (o mostrata nei risultati).
+        for ((text, focused) in screen.searches) {
+            val hit = SearchQueryClassifier.classify(text, typing = focused) ?: continue
+            blockAppSearch(pkg, hit, now)
+            return
+        }
+
+        // b) Play Store: scheda di un'app di trading, scommesse o prestiti.
+        if (pkg in STORE_PACKAGES) {
+            InAppContentAndAdFilter.classifyStorePage(screen.segments)?.let {
+                blockInApp(pkg, it, now)
+                return
+            }
+        }
+
+        // c) Pubblicità a rischio, poi contenuti dedicati (titoli di video, post, articoli).
+        val hit = InAppContentAndAdFilter.findAd(screen.segments)
+            ?: InAppContentAndAdFilter.findContent(screen.segments)
+            ?: return
+        blockInApp(pkg, hit, now)
+    }
+
+    /** Indietro; se dopo 400 ms la ricerca è ancora a schermo (si era solo chiusa la tastiera), Home. */
+    private fun blockAppSearch(pkg: String, hit: SearchHit, now: Long) {
+        val stillThere = now - lastSearchBlockAt < SEARCH_ESCALATION_MS
+        lastSearchBlockAt = now
+        lastScreenHash = 0
+        app.securityLog.grouped(
+            "search:$pkg:${hit.query}", EventType.SEARCH, Severity.WARNING,
+            "Ricerca bloccata su ${appName(pkg)}: \"${hit.query}\"",
+            "Categoria: ${hit.category.label} · termine: ${hit.term}"
+        )
+        performGlobalAction(if (stillThere) GLOBAL_ACTION_HOME else GLOBAL_ACTION_BACK)
+        if (!stillThere) handler.postDelayed({ scheduleScan(pkg, SystemClock.elapsedRealtime(), immediate = true) }, 400)
+        Toast.makeText(this, "SafeGuard: ricerca bloccata (${hit.category.label})", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Scala di azioni: la prima volta si prova la più leggera (scorrere oltre un annuncio o un
+     * post nei feed, Indietro negli altri casi); se entro pochi secondi il contenuto è ancora lì
+     * si passa a Indietro e infine alla Home.
+     */
+    private fun blockInApp(pkg: String, hit: InAppHit, now: Long) {
+        val level = if (now - lastInAppBlockAt < IN_APP_ESCALATION_MS) inAppLevel + 1 else 0
+        inAppLevel = level
+        lastInAppBlockAt = now
+        lastScreenHash = 0
+        val name = appName(pkg)
+        val title = when (hit.kind) {
+            InAppKind.AD -> "Pubblicità bloccata su $name"
+            InAppKind.STORE_PAGE -> "Scheda di un'app bloccata su $name"
+            InAppKind.CONTENT -> "Contenuto bloccato su $name"
+        }
+        app.securityLog.grouped(
+            "inapp:$pkg:${hit.kind}:${hit.term}", EventType.CONTENT, Severity.WARNING,
+            title, "${hit.category.label} · \"${hit.excerpt}\""
+        )
+        val scrollable = hit.kind == InAppKind.AD || (hit.kind == InAppKind.CONTENT && pkg in FEED_PACKAGES)
+        when {
+            level >= 2 -> performGlobalAction(GLOBAL_ACTION_HOME)
+            level == 0 && scrollable && swipeForward() -> Unit
+            else -> performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+        handler.postDelayed({ scheduleScan(pkg, SystemClock.elapsedRealtime(), immediate = true) }, 600)
+        Toast.makeText(this, "SafeGuard: $title", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Scorrimento rapido verso l'alto: fa uscire dallo schermo l'annuncio o il video del feed. */
+    private fun swipeForward(): Boolean = try {
+        val metrics = resources.displayMetrics
+        val x = metrics.widthPixels * 0.5f
+        val path = Path().apply {
+            moveTo(x, metrics.heightPixels * 0.74f)
+            lineTo(x, metrics.heightPixels * 0.22f)
+        }
+        dispatchGesture(
+            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 120)).build(), null, null
+        )
+    } catch (e: Exception) {
+        false
+    }
+
+    /** Categoria per cui l'app è bloccata, o null. Il risultato è in cache finché la whitelist non cambia. */
+    private fun blockedAppCategory(pkg: String): ContentCategory? {
+        val filter = app.filterStore.current
+        if (filter !== packageVerdictsFilter) {
+            packageVerdictsFilter = filter
+            packageVerdicts.clear()
+        }
+        packageVerdicts[pkg]?.let { return it.orElse(null) }
+        val allowed = filter.whitelistedDomains.mapTo(HashSet()) { BlockedPackages.labelOfDomain(it) }
+        val category = BlockedPackages.categoryOf(pkg, appName(pkg).takeIf { it != pkg }, allowed)
+        packageVerdicts[pkg] = java.util.Optional.ofNullable(category)
+        return category
+    }
+
+    private fun blockApp(pkg: String, category: ContentCategory, now: Long) {
+        if (now - lastAppBlockAt < RELOCK_THROTTLE_MS) return
+        lastAppBlockAt = now
+        val name = appName(pkg)
+        app.securityLog.grouped(
+            "app:$pkg", EventType.APP, Severity.CRITICAL,
+            "App bloccata all'apertura: $name", "Categoria: ${category.label} · $pkg"
+        )
+        performGlobalAction(GLOBAL_ACTION_HOME)
+        startActivity(LockScreenActivity.blockedAppIntent(this, name))
+    }
+
+    /** Nome dell'app mostrato all'utente ("YouTube"), con cache; il nome del package se non è leggibile. */
+    private fun appName(pkg: String): String = appNames.getOrPut(pkg) {
+        try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (e: Exception) {
+            pkg
+        }
+    }
+
     /** Sui vecchi Android i nodi vanno restituiti al pool; da Android 13 è un'operazione vuota. */
     @Suppress("DEPRECATION")
     private fun release(node: AccessibilityNodeInfo?) {
@@ -355,14 +569,14 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     }
 
     /** Esce dal motore di ricerca: Indietro (chiude la tastiera o la pagina dei risultati), poi Home. */
-    private fun blockSearch(hit: SearchHit, now: Long) {
+    private fun blockSearch(hit: SearchHit, now: Long, pkg: String) {
         lastContentBlockAt = now
         // Nel log solo la categoria: il testo cercato non viene mai registrato.
         android.util.Log.i("SafeGuardSearch", "ricerca bloccata: ${hit.category}")
         lastScanKey = null
         app.securityLog.grouped(
             "search:${hit.query}", EventType.SEARCH, Severity.WARNING,
-            "Ricerca bloccata: \"${hit.query}\"", "Categoria: ${hit.category.label} · termine: ${hit.term}"
+            "Ricerca bloccata su ${appName(pkg)}: \"${hit.query}\"", "Categoria: ${hit.category.label} · termine: ${hit.term}"
         )
         performGlobalAction(GLOBAL_ACTION_BACK)
         handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 250)
@@ -413,12 +627,28 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
     private fun buildIgnoredPackages(): Set<String> {
         val ignored = HashSet(ALWAYS_IGNORED)
         ignored.add(packageName)
+        // Ogni lettura è protetta: un'eccezione qui impedirebbe al servizio di partire.
         // Launcher
-        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        packageManager.queryIntentActivities(home, 0).forEach { ignored.add(it.activityInfo.packageName) }
-        // Tastiera in uso
-        Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-            ?.substringBefore('/')?.let { ignored.add(it) }
+        try {
+            val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+            packageManager.queryIntentActivities(home, 0).forEach { ignored.add(it.activityInfo.packageName) }
+        } catch (e: Exception) {
+            android.util.Log.w("SafeGuardGuard", "Elenco dei launcher non leggibile: ${e.message}")
+        }
+        // Tastiere: tutte quelle abilitate (l'impostazione ENABLED_INPUT_METHODS non è più
+        // leggibile dalle app che puntano ad Android 14+, si usa InputMethodManager).
+        try {
+            getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                ?.enabledInputMethodList?.forEach { ignored.add(it.packageName) }
+        } catch (e: Exception) {
+            android.util.Log.w("SafeGuardGuard", "Elenco delle tastiere non leggibile: ${e.message}")
+        }
+        try {
+            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                ?.substringBefore('/')?.let { ignored.add(it) }
+        } catch (e: Exception) {
+            // la tastiera di Google e le più diffuse sono comunque nell'elenco fisso
+        }
         ignored.removeAll(SETTINGS_PACKAGES)
         return ignored
     }
@@ -436,7 +666,14 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
         private var instance: SettingsGuardAccessibilityService? = null
 
         private const val RELOCK_THROTTLE_MS = 800L
-        private const val SCAN_DEBOUNCE_MS = 300L
+        private const val SCAN_DEBOUNCE_MS = 350L
+        private const val SCAN_IMMEDIATE_MS = 40L
+        private const val SEARCH_ESCALATION_MS = 1_500L
+        private const val IN_APP_ESCALATION_MS = 5_000L
+        private const val MAX_NODES = 600
+        private const val MAX_SEGMENTS = 400
+        private const val MAX_SEGMENT_CHARS = 1_200
+        private const val MAX_QUERY_CHARS = 120
         private const val SCAN_MAX_WAIT_MS = 1_200L
         private const val RESCAN_WINDOW_MS = 6_000L
         private const val INTEGRITY_INTERVAL_MS = 15_000L
@@ -495,9 +732,35 @@ class SettingsGuardAccessibilityService : AccessibilityService() {
             "com.android.permissioncontroller", "com.google.android.dialer", "com.android.dialer",
             "com.google.android.contacts", "com.samsung.android.dialer", "com.android.phone",
             "com.google.android.apps.messaging", "com.samsung.android.messaging",
-            "com.whatsapp", "com.whatsapp.w4b", "org.telegram.messenger", "org.thoughtcrime.securesms",
+            "com.whatsapp", "com.whatsapp.w4b", "org.thoughtcrime.securesms",
             "com.google.android.gm", "com.microsoft.office.outlook",
+            // tastiere, fotocamera, galleria, orologio, calcolatrice
+            "com.google.android.inputmethod.latin", "com.samsung.android.honeyboard", "com.touchtype.swiftkey",
+            "com.android.camera", "com.android.camera2", "com.google.android.GoogleCamera", "com.sec.android.app.camera",
+            "com.google.android.apps.photos", "com.sec.android.gallery3d", "com.google.android.deskclock",
+            "com.google.android.calculator", "com.android.documentsui", "com.google.android.apps.nexuslauncher",
+            "com.google.android.gms", "com.android.vpndialogs.unused",
         )
+
+        /** Store di app: qui si controlla anche la scheda dell'app prima che venga installata. */
+        private val STORE_PACKAGES = setOf(
+            "com.android.vending", "com.huawei.appmarket", "com.sec.android.app.samsungapps",
+            "com.xiaomi.mipicks", "com.amazon.venezia", "com.aurora.store", "org.fdroid.fdroid",
+        )
+
+        /** Feed a scorrimento: annunci e post a rischio vengono prima scavalcati con uno scorrimento. */
+        private val FEED_PACKAGES = setOf(
+            "com.google.android.youtube", "com.instagram.android", "com.instagram.lite", "com.facebook.katana",
+            "com.facebook.lite", "com.zhiliaoapp.musically", "com.ss.android.ugc.trill", "com.twitter.android",
+            "com.reddit.frontpage", "com.snapchat.android", "com.pinterest", "com.linkedin.android",
+            "com.google.android.apps.magazines", "flipboard.app", "tv.twitch.android.app", "com.vkontakte.android",
+            "org.telegram.messenger", "com.threads.android", "com.instagram.barcelona",
+        )
+
+        private const val HANDLED_EVENTS = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_SCROLLED or
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
 
         /** Caselle (anche di sola lettura) in cui le app di ricerca mostrano la ricerca in corso. */
         private val SEARCH_BOX_IDS = mapOf(

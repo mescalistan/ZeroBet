@@ -29,6 +29,11 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
         </intent>
+        <!-- Nome delle app avviabili: serve al Registro Allarmi ("Ricerca bloccata su YouTube") e al blocco delle app dedicate -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

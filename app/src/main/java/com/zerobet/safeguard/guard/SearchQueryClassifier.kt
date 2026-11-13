@@ -191,7 +191,7 @@ object SearchQueryClassifier {
         "investimento mortale", "investimento ciclista", "investimento di un pedone", "investimento auto",
         "investimento treno", "investimento ferroviario", "investimento animale", "investi un pedone",
         // trading
-        "trading card", "trading cards", "trading post", "trade union", "trade unions", "fair trade",
+        "insider trading", "trading card", "trading cards", "trading post", "trade union", "trade unions", "fair trade",
         "trade off", "trade mark", "world trade center", "world trade", "free trade", "trade show",
         "trader joe", "trader joes", "trader joe s",
         // gioco
@@ -264,42 +264,60 @@ object SearchQueryClassifier {
     fun classify(rawQuery: String, typing: Boolean = false): SearchHit? =
         match(rawQuery, typing)?.let { SearchHit(it.category, it.term, rawQuery.trim().take(120)) }
 
-    private fun match(rawQuery: String, typing: Boolean): SearchHit? {
-        if (rawQuery.length < 3 || rawQuery.length > 300) return null
+    private fun match(rawQuery: String, typing: Boolean): SearchHit? = collect(rawQuery, typing, all = false).firstOrNull()
+
+    /**
+     * Tutti i termini a rischio (distinti) presenti in un testo breve: serve a valutare titoli di
+     * video, post e articoli, dove una sola parola generica non basta (vedi InAppContentAndAdFilter).
+     * I risultati sono tenuti in una piccola cache: gli stessi titoli restano a schermo a lungo.
+     */
+    fun matchAll(text: String): List<SearchHit> {
+        synchronized(cache) { cache[text]?.let { return it } }
+        val hits = collect(text, typing = false, all = true)
+        synchronized(cache) { cache[text] = hits }
+        return hits
+    }
+
+    private val cache = object : LinkedHashMap<String, List<SearchHit>>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<SearchHit>>?): Boolean = size > 1_500
+    }
+
+    private fun collect(rawQuery: String, typing: Boolean, all: Boolean): List<SearchHit> {
+        if (rawQuery.length < 3 || rawQuery.length > 300) return emptyList()
         var text = normalize(rawQuery)
         if (typing && !rawQuery.last().isWhitespace()) text = text.substringBeforeLast(' ', "")
-        if (text.length < 3) return null
+        if (text.length < 3) return emptyList()
 
         var padded = " $text "
-        if (HELP_PHRASES.any { padded.contains(" $it ") }) return null
+        if (HELP_PHRASES.any { padded.contains(" $it ") }) return emptyList()
         val allTokens = text.split(' ')
-        if (allTokens.any { it in HELP_WORDS }) return null
+        if (allTokens.any { it in HELP_WORDS }) return emptyList()
+
+        val out = ArrayList<SearchHit>(2)
+        fun add(category: ContentCategory, term: String): Boolean {
+            if (out.none { it.term == term }) out.add(SearchHit(category, term))
+            return !all                                  // true = basta la prima corrispondenza
+        }
 
         for ((phrase, category) in PRIORITY_PHRASES) {
-            if (padded.contains(" $phrase ")) return SearchHit(category, phrase)
+            if (padded.contains(" $phrase ") && add(category, phrase)) return out
         }
         for (neutral in NEUTRAL_PHRASES) {
             if (padded.contains(" $neutral ")) padded = padded.replace(" $neutral ", " | ")
         }
-
         for ((phrase, category) in phraseIndex) {
-            if (padded.contains(" $phrase ")) return SearchHit(category, phrase)
+            if (padded.contains(" $phrase ") && add(category, phrase)) return out
         }
-
         for (token in padded.split(' ')) {
             if (token.length < 3) continue
-            wordIndex[token]?.let { return SearchHit(it, token) }
-            if (BET_BRAND.matches(token)) return SearchHit(ContentCategory.GAMBLING, token)
-            for ((category, stems) in STEMS) {
-                if (stems.any { token.startsWith(it) }) return SearchHit(category, token)
-            }
-            for ((category, suffixes) in SUFFIXES) {
-                if (suffixes.any { token.length > it.length && token.endsWith(it) }) {
-                    return SearchHit(category, token)
-                }
-            }
+            val category = wordIndex[token]
+                ?: (if (BET_BRAND.matches(token)) ContentCategory.GAMBLING else null)
+                ?: STEMS.entries.firstOrNull { (_, stems) -> stems.any { token.startsWith(it) } }?.key
+                ?: SUFFIXES.entries.firstOrNull { (_, suffixes) -> suffixes.any { token.length > it.length && token.endsWith(it) } }?.key
+                ?: continue
+            if (add(category, token)) return out
         }
-        return null
+        return out
     }
 
     // ---------------------------------------------------------------------------------------

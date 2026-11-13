@@ -67,7 +67,8 @@ class LockScreenActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        val issue = problem
+                        val blockedApp = problem?.takeIf { it.startsWith(APP_PREFIX) }?.removePrefix(APP_PREFIX)
+                        val issue = problem?.takeIf { blockedApp == null }
                         if (issue != null) {
                             Text(
                                 if (issue == IntegrityChecker.PROBLEM_VPN) "Il filtro di rete di SafeGuard è stato spento."
@@ -94,8 +95,9 @@ class LockScreenActivity : ComponentActivity() {
                         }
                         PinVerify(
                             pinManager = pinManager,
-                            title = if (issue != null) "Protezione disattivata" else "Impostazione protetta",
-                            subtitle = if (issue != null) "Riattiva il servizio qui sopra per continuare a usare il telefono,\noppure inserisci il PIN del tutore."
+                            title = if (blockedApp != null) "App non consentita" else if (issue != null) "Protezione disattivata" else "Impostazione protetta",
+                            subtitle = if (blockedApp != null) "$blockedApp è bloccata da SafeGuard.\nSolo il tutore può aprirla, con il PIN."
+                            else if (issue != null) "Riattiva il servizio qui sopra per continuare a usare il telefono,\noppure inserisci il PIN del tutore."
                             else "Questa sezione può disattivare SafeGuard.\nÈ richiesto il PIN del tutore.",
                             onSuccess = {
                                 pinAccepted = true
@@ -135,6 +137,10 @@ class LockScreenActivity : ComponentActivity() {
 
     companion object {
         private const val EXTRA_PROBLEM = "problem"
+        private const val APP_PREFIX = "app:"
+
+        /** Avviso mostrato quando viene aperta un'app di trading, scommesse o prestiti. */
+        fun blockedAppIntent(context: Context, appLabel: String): Intent = integrityIntent(context, APP_PREFIX + appLabel)
 
         /** Intent per la modalità "servizio obbligatorio spento" (vedi IntegrityChecker). */
         fun integrityIntent(context: Context, problem: String): Intent =

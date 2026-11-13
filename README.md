@@ -60,6 +60,8 @@ app/src/main/
     ├── security/DeviceStorage.kt  Storage "device protected" per Direct Boot
     ├── security/SecurityLog.kt    Registro Allarmi (scrittura in background, raggruppamento)
     ├── guard/IntegrityChecker.kt  Controllo dei servizi obbligatori
+    ├── guard/InAppContentAndAdFilter.kt  Pubblicità e contenuti a rischio nelle app
+    ├── guard/BlockedPackages.kt   App dedicate chiuse all'apertura
     ├── vpn/HashedDomainSet.kt     Liste esterne compatte (hash a 64 bit + ricerca binaria)
     ├── receiver/SimStateReceiver.kt  Rimozione/inserimento SIM
     ├── receiver/BootReceiver.kt   Riavvio al boot (LOCKED_BOOT_COMPLETED)
@@ -94,6 +96,9 @@ con ricerca binaria: match esatto, poi match sui domini padre (una ricerca per l
 | **Anti-DoH** | I resolver DoH noti (`dns.google`, `cloudflare-dns.com`, `dns.quad9.net`…) sono in blacklist fissa; il canary di Firefox riceve NXDOMAIN. |
 | **Contenuti a schermo** (`ContentClassifier`) | Il servizio di accessibilità legge i testi visibili in browser e app: con una combinazione ad alta confidenza di espressioni (es. "bonus benvenuto" + "gioca ora", "calcola la tua rata" + "TAEG") torna indietro e, se è un sito esterno, ne aggiunge il dominio agli auto-appresi. Vale anche dentro il sito della banca in whitelist (senza però bloccarne il dominio). |
 | **Ricerche** (`SearchQueryClassifier`) | Se in un motore di ricerca (Google, Bing, DuckDuckGo, Yahoo, Brave, Ecosia, Startpage, Qwant… e ricerca di YouTube) viene scritta una ricerca su scommesse, trading/investimenti o prestiti, l'app esce dal motore di ricerca e torna alla Home. Qui basta una parola ("trading", "investimenti", "mutuo", un marchio…), ma il confronto è per parola intera: "investigatore", "betulla", "giocatore in prestito", "borsa di studio" non scattano. Le ricerche di aiuto ("come smettere di giocare", "ludopatia numero verde") non sono mai bloccate. |
+| **App: ricerche** | Il blocco delle ricerche vale in qualsiasi app (YouTube, Instagram, Facebook, TikTok, Telegram, X, Reddit, Play Store, Google News…): le caselle di ricerca sono riconosciute dall'id della vista o dal suggerimento ("Cerca"). Azione: Indietro e, se dopo 400 ms la ricerca è ancora a schermo, Home. Nel registro: *"Ricerca bloccata su YouTube: trading online"*. |
+| **App: pubblicità e contenuti** (`InAppContentAndAdFilter`) | Sui testi visibili, un elemento alla volta. **Pubblicità**: etichetta di annuncio ("Sponsorizzato", "Annuncio", "Ad"…) o invito all'azione ("Installa", "Scopri di più") vicino a un termine a rischio. **Contenuti**: un titolo/post/articolo con un'espressione inequivocabile ("come investire", "trading online", "pronostici serie A", "prestito veloce") o almeno due termini a rischio; "manovra finanziaria", "inflazione ISTAT", "stipendi pubblici" non scattano. Azione a scala: scorrimento in avanti nei feed, poi Indietro, poi Home. |
+| **App dedicate** (`BlockedPackages`) | Le app di trading, borsa, crypto, scommesse, poker, casinò e finanziarie vengono chiuse all'apertura con una schermata di avviso: elenco di package noti, euristica sul nome del package e sul nome visibile. Resta libera l'app della banca in whitelist. Nel Play Store la scheda di un'app di questo tipo viene chiusa prima che si possa premere "Installa". |
 | **DNS privato** | Il Guardiano chiede il PIN sul dialogo "DNS privato" delle Impostazioni; la dashboard avvisa se è impostato un provider. |
 
 Le voci delle liste esterne già coperte da parole chiave o euristica non vengono salvate (su circa
@@ -144,9 +149,11 @@ lascia a sua volta una riga.
 | Heap Java del processo sull'emulatore, a riposo | circa 12 MB (prima circa 28 MB) |
 | CPU a riposo sull'emulatore | 0% |
 
-Il Guardiano riceve dal sistema solo gli eventi di Impostazioni, installer, browser supportati e app di
-ricerca; legge la schermata dopo 300 ms di quiete e non la rilegge se la barra degli indirizzi non è
-cambiata. Il thread della VPN dorme in una lettura bloccante quando non c'è traffico DNS.
+Il Guardiano segue tutte le app tranne quelle scartate in O(1) (interfaccia di sistema, launcher,
+tastiere, telefono, fotocamera, messaggi privati). Cambio di finestra e testo digitato si valutano
+subito; scorrimento e aggiornamenti del contenuto dopo 350 ms di quiete. La schermata è letta in un
+solo passaggio e, se il suo hash è uguale a quello precedente, non viene analizzata; i testi già
+valutati restano in una cache. Sull'emulatore: 0,0–0,2% di CPU scorrendo il feed di YouTube. Il thread della VPN dorme in una lettura bloccante quando non c'è traffico DNS.
 `./gradlew testDebugUnitTest` rigenera i numeri in `app/build/reports/safeguard-benchmark.txt`.
 
 ## Configurazione consigliata sul telefono
@@ -175,8 +182,14 @@ SafeGuard è un deterrente efficace, non una barriera assoluta. In particolare:
   attivi il riconoscimento dei contenuti e il filtro DNS);
 - dalle pagine CONSOB i domini sono estratti con regex: i link di servizio noti sono esclusi, ma un sito legittimo
   citato in un comunicato potrebbe finire in lista;
-- il riconoscimento dei contenuti a schermo vale per browser e app di ricerca: nelle altre app il servizio di
-  accessibilità non viene più attivato (scelta per i consumi), restano filtro DNS e blocco delle ricerche;
+- WhatsApp, Signal, SMS, Gmail, Outlook, telefono e contatti non vengono mai letti; Telegram sì (canali e ricerca),
+  quindi una chat privata con due termini a rischio nello stesso messaggio può essere chiusa;
+- il filtro in-app legge solo i testi: un video il cui titolo non dice nulla, o un annuncio fatto di sola immagine,
+  non viene riconosciuto; un'app che non espone i testi all'accessibilità non è controllabile;
+- un titolo che usa i termini a rischio in un altro senso può essere chiuso (falso positivo): la scala di azioni
+  parte dallo scorrimento proprio per limitarne l'effetto;
+- l'elenco delle app dedicate non può essere completo: quelle non in elenco sono riconosciute solo se il nome del
+  package o dell'app contiene una parola a rischio;
 - nelle pagine dei risultati dei motori di ricerca decide solo la ricerca scritta, non il testo dei risultati;
 - Android limita l'apertura di schermate dallo sfondo: se il Guardiano è spento, la schermata di blocco del
   controllo di integrità può non aprirsi da sola e resta la notifica; se un task killer chiude tutto il
